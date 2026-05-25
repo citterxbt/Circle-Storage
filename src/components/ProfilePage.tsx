@@ -104,10 +104,10 @@ export default function ProfilePage() {
 
   if (!connected) {
     return (
-      <div className="flex flex-col items-center justify-center py-20 bg-slate-900/10 border border-slate-900 rounded-3xl p-10 text-center" id="profile-unconnected-container">
-        <User className="w-16 h-16 text-slate-700 mb-4" />
-        <h3 className="text-xl font-medium text-white mb-2 font-sans">Connect Wallet to Manage Profile</h3>
-        <p className="text-sm text-slate-400 max-w-sm mb-6 font-sans">
+      <div className="flex flex-col items-center justify-center py-20 bg-black/25 border border-white/10 rounded-3xl p-10 text-center shadow-xl animate-fadeIn" id="profile-unconnected-container">
+        <User className="w-16 h-16 text-pink-500/70 mb-4" />
+        <h3 className="text-xl font-bold text-white mb-2 font-sans">Connect Wallet to Manage Profile</h3>
+        <p className="text-sm text-white/60 max-w-sm mb-6 font-sans leading-relaxed">
           To read and update your storage metadata profile, please select and authenticate your Aptos wallet in the top bar.
         </p>
       </div>
@@ -115,21 +115,21 @@ export default function ProfilePage() {
   }
 
   return (
-    <div className="max-w-4xl mx-auto space-y-8" id="profile-connected-view">
+    <div className="max-w-4xl mx-auto space-y-8 animate-fadeIn" id="profile-connected-view">
       {/* Header and overview block */}
-      <div className="flex flex-col md:flex-row items-center gap-6 p-8 bg-slate-900/45 border border-slate-900 rounded-3xl relative overflow-hidden" id="profile-overview-card">
-        <div className="absolute top-0 right-0 w-32 h-32 bg-cyan-500/5 rounded-full blur-2xl"></div>
+      <div className="flex flex-col md:flex-row items-center gap-6 p-8 bg-black/35 border border-white/10 rounded-3xl relative overflow-hidden" id="profile-overview-card">
+        <div className="absolute top-0 right-0 w-32 h-32 bg-pink-500/5 rounded-full blur-2xl"></div>
         
         <div className="relative group flex-shrink-0">
           <img
             src={avatarUrl || `https://api.dicebear.com/7.x/bottts/svg?seed=${address}`}
             alt="User avatar"
             referrerPolicy="no-referrer"
-            className="w-24 h-24 rounded-2xl border-2 border-slate-800 bg-slate-950 p-1.5 object-cover"
+            className="w-24 h-24 rounded-2xl border border-white/15 bg-black/40 p-1.5 object-cover"
           />
           <button
             onClick={generateNewBotAvatar}
-            className="absolute -bottom-1 -right-1 p-1 bg-slate-950 text-cyan-400 hover:text-cyan-300 rounded-lg border border-slate-800 cursor-pointer transition-colors shadow-lg"
+            className="absolute -bottom-1 -right-1 p-1.5 bg-[#1d0c15] text-pink-400 hover:text-white rounded-lg border border-white/10 cursor-pointer transition-colors shadow-lg"
             title="Generate Random Avatar"
           >
             <RotateCw className="w-3.5 h-3.5" />
@@ -138,34 +138,34 @@ export default function ProfilePage() {
 
         <div className="text-center md:text-left flex-1 space-y-2">
           <div className="flex items-center justify-center md:justify-start gap-3">
-            <h2 className="text-2xl font-sans font-medium text-white tracking-tight">
+            <h2 className="text-2xl font-sans font-bold text-white tracking-tight">
               {username || "Aptos Pioneer"}
             </h2>
-            <span className="text-[10px] font-mono uppercase bg-slate-800 text-slate-400 px-2 py-0.5 rounded-full border border-slate-700">
+            <span className="text-[10px] font-mono uppercase bg-pink-950/40 text-pink-400 px-2 py-0.5 rounded-full border border-pink-500/20 font-bold">
               Active
             </span>
           </div>
-          <p className="text-xs text-slate-500 font-mono select-all">
+          <p className="text-xs text-amber-400 font-mono select-all font-bold">
             {address}
           </p>
-          {bio && <p className="text-sm text-slate-400 font-sans max-w-xl line-clamp-2">{bio}</p>}
+          {bio && <p className="text-sm text-white/70 font-sans max-w-xl line-clamp-2">{bio}</p>}
         </div>
       </div>
 
       {loading ? (
         <div className="flex justify-center py-20">
-          <span className="text-slate-500 font-mono animate-pulse">Syncing profile with Aptos ledger...</span>
+          <span className="text-white/40 font-mono animate-pulse">Syncing profile with Aptos ledger...</span>
         </div>
       ) : (
-        <form onSubmit={saveProfile} className="bg-slate-900/20 border border-slate-900 p-8 rounded-3xl space-y-6" id="profiles-edit-form">
-          <div className="flex items-center gap-2 pb-4 border-b border-slate-900">
-            <Edit className="w-4 h-4 text-cyan-400" />
-            <h3 className="text-base font-semibold text-white">Modify Metadata Profile</h3>
+        <form onSubmit={saveProfile} className="bg-black/30 border border-white/10 p-8 rounded-3xl space-y-6" id="profiles-edit-form">
+          <div className="flex items-center gap-2 pb-4 border-b border-white/10">
+            <Edit className="w-4 h-4 text-pink-400" />
+            <h3 className="text-base font-bold text-white font-sans">Modify Metadata Profile</h3>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="space-y-2">
-              <label htmlFor="input-username" className="block text-xs font-mono uppercase text-slate-400">Username <span className="text-cyan-500">*</span></label>
+              <label htmlFor="input-username" className="block text-xs font-mono uppercase text-white/45 font-bold">Username <span className="text-pink-500">*</span></label>
               <input
                 id="input-username"
                 type="text"
@@ -173,86 +173,86 @@ export default function ProfilePage() {
                 placeholder="Enter unique profile handle"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                className="w-full bg-slate-950/80 border border-slate-900 text-slate-100 rounded-xl px-4 py-3 text-sm focus:border-cyan-400 focus:outline-none transition-colors"
+                className="w-full bg-black/20 border border-white/10 text-white rounded-xl px-4 py-3 text-sm focus:border-pink-500 focus:outline-none transition-colors"
               />
             </div>
 
             <div className="space-y-2">
-              <label htmlFor="input-avatar" className="block text-xs font-mono uppercase text-slate-400">Avatar URL</label>
+              <label htmlFor="input-avatar" className="block text-xs font-mono uppercase text-white/45 font-bold">Avatar URL</label>
               <input
                 id="input-avatar"
                 type="text"
                 placeholder="https://example.com/photo.png"
                 value={avatarUrl}
                 onChange={(e) => setAvatarUrl(e.target.value)}
-                className="w-full bg-slate-950/80 border border-slate-900 text-slate-100 rounded-xl px-4 py-3 text-sm focus:border-cyan-400 focus:outline-none transition-colors"
+                className="w-full bg-black/20 border border-white/10 text-white rounded-xl px-4 py-3 text-sm focus:border-pink-500 focus:outline-none transition-colors"
               />
             </div>
           </div>
 
           <div className="space-y-2">
-            <label htmlFor="input-bio" className="block text-xs font-mono uppercase text-slate-400">Biography</label>
+            <label htmlFor="input-bio" className="block text-xs font-mono uppercase text-white/45 font-bold">Biography</label>
             <textarea
               id="input-bio"
               rows={3}
               placeholder="Write a brief introduction about your Web3 files, background or on-chain assets..."
               value={bio}
               onChange={(e) => setBio(e.target.value)}
-              className="w-full bg-slate-950/80 border border-slate-900 text-slate-100 rounded-xl px-4 py-3 text-sm focus:border-cyan-400 focus:outline-none transition-colors resize-none"
+              className="w-full bg-black/20 border border-white/10 text-white rounded-xl px-4 py-3 text-sm focus:border-pink-500 focus:outline-none transition-colors resize-none"
             />
           </div>
 
-          <div className="pt-4 border-t border-slate-900">
-            <h4 className="text-xs font-mono uppercase text-slate-400 mb-4">Sovereign Web3 Credentials (Social Accounts)</h4>
+          <div className="pt-4 border-t border-white/10">
+            <h4 className="text-xs font-mono uppercase text-white/45 mb-4 font-bold">Sovereign Web3 Credentials (Social Accounts)</h4>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               <div className="space-y-2">
-                <label htmlFor="input-x" className="flex items-center gap-1.5 text-xs text-slate-500"><Twitter className="w-3.5 h-3.5 text-slate-400" /> Twitter/X Handle</label>
+                <label htmlFor="input-x" className="flex items-center gap-1.5 text-xs text-white/50"><Twitter className="w-3.5 h-3.5 text-white/60" /> Twitter/X Handle</label>
                 <div className="relative">
-                  <span className="absolute left-3 top-3 text-slate-600 text-sm">@</span>
+                  <span className="absolute left-3 top-3 text-white/40 text-sm">@</span>
                   <input
                     id="input-x"
                     type="text"
                     placeholder="handle"
                     value={xSocial}
                     onChange={(e) => setXSocial(e.target.value)}
-                    className="w-full bg-slate-950/80 border border-slate-900 text-slate-100 rounded-xl pl-8 pr-4 py-3 text-sm focus:border-cyan-400 focus:outline-none transition-colors"
+                    className="w-full bg-black/20 border border-white/10 text-white rounded-xl pl-8 pr-4 py-3 text-sm focus:border-pink-500 focus:outline-none transition-colors"
                   />
                 </div>
               </div>
 
               <div className="space-y-2">
-                <label htmlFor="input-github" className="flex items-center gap-1.5 text-xs text-slate-500"><Github className="w-3.5 h-3.5 text-slate-400" /> GitHub Account</label>
+                <label htmlFor="input-github" className="flex items-center gap-1.5 text-xs text-white/50"><Github className="w-3.5 h-3.5 text-white/60" /> GitHub Account</label>
                 <input
                   id="input-github"
                   type="text"
                   placeholder="github-username"
                   value={githubSocial}
                   onChange={(e) => setGithubSocial(e.target.value)}
-                  className="w-full bg-slate-950/80 border border-slate-900 text-slate-100 rounded-xl px-4 py-3 text-sm focus:border-cyan-400 focus:outline-none transition-colors"
+                  className="w-full bg-black/20 border border-white/10 text-white rounded-xl px-4 py-3 text-sm focus:border-pink-500 focus:outline-none transition-colors"
                 />
               </div>
 
               <div className="space-y-2">
-                <label htmlFor="input-tg" className="flex items-center gap-1.5 text-xs text-slate-500"><Send className="w-3.5 h-3.5 text-slate-400" /> Telegram Handle</label>
+                <label htmlFor="input-tg" className="flex items-center gap-1.5 text-xs text-white/50"><Send className="w-3.5 h-3.5 text-white/60" /> Telegram Handle</label>
                 <input
                   id="input-tg"
                   type="text"
                   placeholder="tg_handle"
                   value={telegramSocial}
                   onChange={(e) => setTelegramSocial(e.target.value)}
-                  className="w-full bg-slate-950/80 border border-slate-900 text-slate-100 rounded-xl px-4 py-3 text-sm focus:border-cyan-400 focus:outline-none transition-colors"
+                  className="w-full bg-black/20 border border-white/10 text-white rounded-xl px-4 py-3 text-sm focus:border-pink-500 focus:outline-none transition-colors"
                 />
               </div>
             </div>
           </div>
 
-          <div className="pt-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-t border-slate-900">
-            <span className="text-[11px] text-slate-500 font-sans italic">All credentials strictly stored server-side with gated API validation.</span>
+          <div className="pt-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-t border-white/10">
+            <span className="text-[11px] text-white/40 font-sans italic">All credentials strictly stored server-side with gated API validation.</span>
             
             <div className="flex items-center gap-3">
               {savedSuccess && (
                 <div className="flex items-center gap-1 text-emerald-400 text-xs font-medium animate-fadeIn">
-                  <CheckCircle2 className="w-4 h-4" />
+                  <CheckCircle2 className="w-4 h-45 w-4 h-4" />
                   Profile updated successfully
                 </div>
               )}
@@ -260,7 +260,7 @@ export default function ProfilePage() {
                 id="btn-save-profile"
                 type="submit"
                 disabled={saving}
-                className="px-6 py-3 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-medium font-sans text-sm rounded-xl cursor-pointer flex items-center gap-2 transition-all disabled:opacity-50"
+                className="px-6 py-3 bg-gradient-to-r from-pink-500 to-amber-500 hover:from-pink-400 hover:to-amber-400 text-white font-bold font-sans text-sm rounded-xl cursor-pointer flex items-center gap-2 transition-all disabled:opacity-50 border border-white/15"
               >
                 {saving ? (
                   <>Saving...</>

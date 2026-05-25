@@ -38,10 +38,6 @@ export default function MarketplacePage() {
             // Test if uploader is current user
             if (f.uploader.toLowerCase() === address.toLowerCase()) {
               ownedList.push(f.id);
-            } else {
-              // Try downloading metadata. If we get 200, we already have access!
-              // Since the server gates download with a 403, we can check owners.
-              // To avoid N+1 server loads, we will check if the user is registered in purchases database state on the server
             }
           }
           setOwnedFileIds(ownedList);
@@ -192,32 +188,32 @@ export default function MarketplacePage() {
 
   return (
     <div className="space-y-8 animate-fadeIn" id="marketplace-section">
-      {/* Title & Filter rows */}
+      {/* Title & Filter rows - Premium Styling */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
         <div>
-          <h3 className="text-xl font-medium text-white font-sans flex items-center gap-2">
-            <Layers className="w-5 h-5 text-cyan-400" />
+          <h3 className="text-xl font-bold text-white font-sans flex items-center gap-2">
+            <Layers className="w-5 h-5 text-pink-500" />
             File Marketplace
           </h3>
-          <p className="text-xs text-slate-400 font-sans mt-0.5">Direct peer-to-peer decentralized file checkout backed by Aptos on-chain payment certificates.</p>
+          <p className="text-xs text-white/65 font-sans mt-1">Direct peer-to-peer decentralized file checkout backed by Aptos on-chain payment certificates.</p>
         </div>
 
         {/* Search Input bar */}
-        <div className="flex items-center gap-2 max-w-sm w-full" id="marketplace-filters">
-          <div className="relative flex-1">
-            <Search className="w-4 h-4 text-slate-500 absolute left-3.5 top-3.5" />
+        <div className="flex items-center gap-2.5 max-w-sm w-full" id="marketplace-filters">
+          <div className="relative flex-1 shadow-sm">
+            <Search className="w-4 h-4 text-white/40 absolute left-3.5 top-3.5" />
             <input
               id="marketplace-search-field"
               type="text"
               placeholder="Search file name, hash or registry..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full bg-slate-900 border border-slate-900/40 text-slate-100 placeholder-slate-500 rounded-xl pl-10 pr-4 py-3 text-sm focus:border-cyan-400 focus:outline-none transition-colors"
+              className="w-full bg-black/20 border border-white/10 text-white placeholder-white/35 rounded-xl pl-10 pr-4 py-3 text-sm focus:border-pink-500 focus:outline-none transition-colors"
             />
           </div>
           <button
             onClick={fetchMarketplaceFiles}
-            className="p-3 bg-slate-900/60 border border-slate-900 text-slate-400 hover:text-cyan-400 hover:bg-slate-900 rounded-xl transition-all cursor-pointer"
+            className="p-3 bg-white/5 border border-white/10 text-white/60 hover:text-pink-400 hover:border-pink-500/20 hover:bg-white/10 rounded-xl transition-all cursor-pointer shadow-sm"
             title="Refresh Listings"
           >
             <RefreshCw className="w-4 h-4" />
@@ -226,13 +222,13 @@ export default function MarketplacePage() {
       </div>
 
       {loading ? (
-        <div className="text-center py-24 bg-slate-900/5 border border-slate-900 rounded-2xl">
-          <span className="text-slate-500 font-mono animate-pulse">Running smart indexing lookup on public Shelby nodes...</span>
+        <div className="text-center py-24 bg-black/20 border border-white/10 rounded-2xl shadow-sm">
+          <span className="text-white/45 font-mono animate-pulse">Running smart indexing lookup on public Shelby nodes...</span>
         </div>
       ) : filteredFiles.length === 0 ? (
-        <div className="text-center py-20 bg-slate-900/10 border border-slate-900 rounded-3xl p-6 text-slate-400 font-sans max-w-sm mx-auto flex flex-col items-center gap-2">
-          <span className="font-semibold text-white">No Public Listings Found</span>
-          <p className="text-xs text-slate-500 leading-relaxed">No public files match your active filter coordinates, or no listings have been registered yet.</p>
+        <div className="text-center py-20 bg-black/20 border border-white/10 rounded-3xl p-6 text-white/70 font-sans max-w-sm mx-auto flex flex-col items-center gap-2 shadow-sm">
+          <span className="font-bold text-white">No Public Listings Found</span>
+          <p className="text-xs text-white/50 leading-relaxed">No public files match your active filter coordinates, or no listings have been registered yet.</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6" id="marketplace-cards-grid">
@@ -243,54 +239,54 @@ export default function MarketplacePage() {
             return (
               <div
                 key={file.id}
-                className="bg-slate-900/20 border border-slate-900 p-6 rounded-2xl hover:border-slate-800 hover:bg-slate-900/40 transition-all flex flex-col justify-between h-[360px] relative overflow-hidden group"
+                className="bg-black/35 border border-white/10 p-6 rounded-2xl hover:border-pink-500/30 hover:shadow-lg hover:shadow-pink-500/5 transition-all flex flex-col justify-between h-[360px] relative overflow-hidden group shadow-md"
               >
                 {/* Light accent orb */}
-                <div className="absolute -top-10 -right-10 w-24 h-24 bg-cyan-500/5 rounded-full blur-xl group-hover:bg-cyan-500/10 transition-all"></div>
+                <div className="absolute -top-10 -right-10 w-24 h-24 bg-pink-500/5 rounded-full blur-xl group-hover:bg-pink-500/10 transition-all"></div>
 
                 <div className="space-y-4">
                   {/* File icon / Name details */}
                   <div className="space-y-2">
-                    <span className="text-[10px] font-mono select-none px-2 py-0.5 rounded border border-slate-800 bg-slate-950 font-bold uppercase text-slate-500 tracking-wider">
+                    <span className="text-[10px] font-mono select-none px-2 py-0.5 rounded border border-pink-500/20 bg-pink-950/40 font-bold uppercase text-pink-400 tracking-wider">
                       Shelby Anchor
                     </span>
-                    <h4 className="text-sm font-sans font-semibold text-white truncate max-w-full" title={file.name}>
+                    <h4 className="text-sm font-sans font-bold text-white truncate max-w-full" title={file.name}>
                       {file.name}
                     </h4>
-                    <p className="text-[10px] font-mono text-cyan-400 truncate select-all">{file.shelby_ref}</p>
+                    <p className="text-[10px] font-mono text-amber-400 truncate select-all">{file.shelby_ref}</p>
                   </div>
 
                   {/* Metadata line indicators */}
-                  <div className="space-y-2 pt-3 border-t border-slate-950 flex flex-col gap-1 text-[11px] text-slate-400">
+                  <div className="space-y-2 pt-3 border-t border-white/10 flex flex-col gap-1 text-[11px] text-white/60">
                     <div className="flex items-center gap-2">
-                      <User className="w-3.5 h-3.5 text-slate-600 flex-shrink-0" />
-                      <span className="truncate">Broker: <span className="text-slate-300 font-semibold">{file.uploader.slice(0, 10)}...</span></span>
+                      <User className="w-3.5 h-3.5 text-pink-400 flex-shrink-0" />
+                      <span className="truncate">Broker: <span className="text-white font-semibold">{file.uploader.slice(0, 10)}...</span></span>
                     </div>
 
                     <div className="flex items-center gap-2">
-                      <Calendar className="w-3.5 h-3.5 text-slate-600 flex-shrink-0" />
-                      <span>Term Lease: <span className="text-slate-300 font-mono font-medium">{file.duration}</span></span>
+                      <Calendar className="w-3.5 h-3.5 text-pink-400 flex-shrink-0" />
+                      <span>Term Lease: <span className="text-white font-mono font-medium">{file.duration}</span></span>
                     </div>
 
                     <div className="flex items-center gap-2">
-                      <Eye className="w-3.5 h-3.5 text-slate-600 flex-shrink-0" />
-                      <span>Volume size: <span className="text-slate-300 font-mono font-medium">{formatBytes(file.size)}</span></span>
+                      <Eye className="w-3.5 h-3.5 text-pink-400 flex-shrink-0" />
+                      <span>Volume size: <span className="text-white font-mono font-medium">{formatBytes(file.size)}</span></span>
                     </div>
                   </div>
                 </div>
 
                 {/* Bottom buyout section */}
-                <div className="pt-4 mt-4 border-t border-slate-950 flex items-center justify-between">
+                <div className="pt-4 mt-4 border-t border-white/10 flex items-center justify-between">
                   <div className="text-left space-y-0.5">
-                    <span className="text-[9px] uppercase font-mono text-slate-500 font-semibold tracking-wider">Access Price</span>
+                    <span className="text-[9px] uppercase font-mono text-white/40 font-semibold tracking-wider">Access Price</span>
                     <span className="text-base font-bold font-mono text-white flex items-center gap-1 leading-none">
-                      <Coins className="w-4 h-4 text-cyan-400" />
-                      {file.price.toFixed(1)} <span className="text-[10px] text-cyan-400 font-bold">APT</span>
+                      <Coins className="w-4 h-4 text-amber-400" />
+                      {file.price.toFixed(1)} <span className="text-[10px] text-amber-400 font-bold">APT</span>
                     </span>
                   </div>
 
                   {isOwner ? (
-                    <span className="text-[11px] font-mono font-bold text-slate-500 italic bg-slate-950 px-3 py-1.5 rounded-xl border border-slate-900">
+                    <span className="text-[11px] font-mono font-bold text-white/50 italic bg-white/5 px-3 py-1.5 rounded-xl border border-white/10">
                       Broker Owner
                     </span>
                   ) : alreadyOwned ? (
@@ -298,7 +294,7 @@ export default function MarketplacePage() {
                       id={`btn-market-download-${file.id}`}
                       onClick={() => downloadFile(file.id, file.name)}
                       disabled={downloadingId === file.id}
-                      className="px-4 py-2 bg-slate-950 border border-emerald-500/20 text-emerald-400 hover:text-emerald-300 rounded-xl text-xs font-sans font-medium hover:border-emerald-500/40 cursor-pointer flex items-center gap-1.5 transition-all"
+                      className="px-4 py-2 bg-emerald-950/40 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-900/30 rounded-xl text-xs font-sans font-bold cursor-pointer flex items-center gap-1.5 transition-all shadow-sm"
                     >
                       {downloadingId === file.id ? (
                         <span className="animate-pulse">Retrieving...</span>
@@ -314,7 +310,7 @@ export default function MarketplacePage() {
                       id={`btn-market-buy-${file.id}`}
                       onClick={() => handlePurchase(file)}
                       disabled={purchasingId === file.id}
-                      className="px-4 py-2 bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-slate-950 rounded-xl text-xs font-sans font-semibold cursor-pointer flex items-center gap-1.5 transition-all shadow-lg"
+                      className="px-4 py-2 bg-gradient-to-r from-pink-500 to-amber-500 hover:from-pink-400 hover:to-amber-400 text-white rounded-xl text-xs font-sans font-bold cursor-pointer flex items-center gap-1.5 transition-all shadow-sm border border-white/10"
                     >
                       {purchasingId === file.id ? (
                         <span className="animate-pulse">Locking...</span>
