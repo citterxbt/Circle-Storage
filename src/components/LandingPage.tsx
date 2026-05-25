@@ -70,7 +70,7 @@ export default function LandingPage({ onEnterApp }: LandingPageProps) {
               onClick={onEnterApp}
               className="px-8 py-4 bg-gradient-to-r from-cyan-500 to-indigo-500 hover:from-cyan-400 hover:to-indigo-400 text-slate-950 font-medium font-sans rounded-xl shadow-lg shadow-cyan-500/10 cursor-pointer flex items-center gap-2 group transition-all"
             >
-              Launch Console
+              Launch App
               <ArrowRight className="w-4 h-4 text-slate-950 group-hover:translate-x-1 transition-transform" />
             </button>
             <a

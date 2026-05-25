@@ -34,9 +34,63 @@ function AppContent() {
     return addr.slice(0, 6) + "..." + addr.slice(-4);
   };
 
+  if (activeTab === "landing") {
+    return (
+      <div className="bg-slate-950 text-slate-100 min-h-screen font-sans flex flex-col justify-between selection:bg-cyan-500/20 selection:text-cyan-300" id="circle-storage-landing-root">
+        {/* Landing Navigation Header */}
+        <header className="sticky top-0 z-50 bg-slate-950/85 backdrop-blur-md border-b border-slate-900/40" id="landing-navigation-bar">
+          <div className="max-w-7xl mx-auto px-6 h-18 flex items-center justify-between">
+            {/* Logo Brand */}
+            <div className="flex items-center gap-2.5 text-left" id="landing-brand-logo">
+              <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-cyan-500 to-indigo-500 flex items-center justify-center shadow-md shadow-cyan-500/10">
+                <HardDrive className="w-5 h-5 text-slate-950" />
+              </div>
+              <div>
+                <span className="text-sm font-sans font-bold tracking-tight text-white block leading-none">Circle Storage</span>
+                <span className="text-[9px] font-mono text-cyan-400 font-semibold uppercase tracking-wider block mt-1">Shelby Testnet</span>
+              </div>
+            </div>
+
+            {/* Anchor Links for Easy Scroll Navigation */}
+            <nav className="hidden md:flex items-center gap-6" id="landing-anchor-links">
+              <a href="#hero-section" className="text-xs font-semibold font-sans text-slate-400 hover:text-slate-100 transition-colors">
+                About
+              </a>
+              <a href="#use-cases-section" className="text-xs font-semibold font-sans text-slate-400 hover:text-slate-100 transition-colors">
+                Use Cases
+              </a>
+              <a href="#how-it-works-section" className="text-xs font-semibold font-sans text-slate-400 hover:text-slate-100 transition-colors">
+                Protocol Flow
+              </a>
+              <a href="#faq-section" className="text-xs font-semibold font-sans text-slate-400 hover:text-slate-100 transition-colors">
+                FAQ
+              </a>
+            </nav>
+
+            {/* Launch App CTAs */}
+            <div>
+              <button
+                id="btn-landing-header-launch"
+                onClick={() => setActiveTab("marketplace")}
+                className="px-5 py-2.5 bg-gradient-to-r from-cyan-500 to-indigo-500 hover:from-cyan-400 hover:to-indigo-400 text-slate-950 font-sans font-bold text-xs rounded-xl cursor-pointer flex items-center gap-1.5 transition-all shadow-md active:scale-95"
+              >
+                Launch App
+              </button>
+            </div>
+          </div>
+        </header>
+
+        {/* Full-bleed landing page content container */}
+        <main className="flex-1" id="landing-content-canvas">
+          <LandingPage onEnterApp={() => setActiveTab("marketplace")} />
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="bg-slate-950 text-slate-100 min-h-screen font-sans flex flex-col justify-between selection:bg-cyan-500/20 selection:text-cyan-300" id="circle-storage-app-root">
-      {/* Top Navigation Hub */}
+      {/* App Specific Header */}
       <header className="sticky top-0 z-50 bg-slate-950/85 backdrop-blur-md border-b border-slate-900/40" id="main-navigation-bar">
         <div className="max-w-7xl mx-auto px-6 h-18 flex items-center justify-between">
           
@@ -59,11 +113,9 @@ function AppContent() {
           <nav className="hidden md:flex items-center gap-1.5" id="nav-links-desktop">
             <button
               onClick={() => setActiveTab("landing")}
-              className={`px-3.5 py-2.5 rounded-lg text-xs font-medium font-sans transition-colors cursor-pointer ${
-                activeTab === "landing" ? "bg-slate-900 text-cyan-400" : "text-slate-400 hover:text-slate-100"
-              }`}
+              className="px-3.5 py-2.5 rounded-lg text-xs font-medium font-sans text-slate-400 hover:text-slate-100 transition-colors cursor-pointer"
             >
-              Overview
+              Exit Console
             </button>
             <button
               id="btn-nav-marketplace"
@@ -189,9 +241,9 @@ function AppContent() {
           <div className="md:hidden border-t border-slate-900/60 bg-slate-950/95 backdrop-blur-md py-4 px-6 space-y-3 font-sans" id="nav-links-mobile">
             <button
               onClick={() => { setActiveTab("landing"); setMobileMenuOpen(false); }}
-              className={`block w-full text-left px-3 py-2 rounded-lg text-sm ${activeTab === "landing" ? "text-cyan-400 bg-slate-900" : "text-slate-400"}`}
+              className="block w-full text-left px-3 py-2 rounded-lg text-sm text-slate-400"
             >
-              Overview
+              Exit Console
             </button>
             <button
               onClick={() => { setActiveTab("marketplace"); setMobileMenuOpen(false); }}
@@ -277,9 +329,6 @@ function AppContent() {
 
       {/* Main Body Dynamic Rendering */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-6 py-12" id="main-content-canvas">
-        {activeTab === "landing" && (
-          <LandingPage onEnterApp={() => setActiveTab("marketplace")} />
-        )}
         {activeTab === "marketplace" && <MarketplacePage />}
         {activeTab === "dashboard" && <DashboardPage />}
         {activeTab === "upload" && <FileUploadPage />}
@@ -287,15 +336,11 @@ function AppContent() {
         {activeTab === "profile" && <ProfilePage />}
       </main>
 
-      {/* Persistent Web3 status margin lines */}
-      <footer className="py-6 border-t border-slate-900 bg-slate-950 text-center text-[11px] text-slate-600 font-mono tracking-wide" id="global-footer">
+      {/* Persistent Web3 footer */}
+      <footer className="py-6 border-t border-slate-910 bg-slate-950 text-center text-[11px] text-slate-600 font-mono tracking-wide" id="global-footer">
         <div className="max-w-7xl mx-auto px-6 flex flex-col sm:flex-row items-center justify-between gap-4">
-          <p>© 2026 Circle Storage. All file descriptors are client-encrypted using AES-256 Sentry.</p>
-          <div className="flex items-center gap-4 text-[10px] text-slate-500">
-            <span>Server Gating Enforced</span>
-            <span>•</span>
-            <span>Aptos JSON-RPC Network Link Success</span>
-          </div>
+          <p>© 2026 Circle Storage. All uploads are end-to-end client-side encrypted before hosting.</p>
+          <p className="text-[10px] text-slate-500">Aptos Shelby Testnet</p>
         </div>
       </footer>
     </div>
