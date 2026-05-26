@@ -111,7 +111,7 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
       // Live Injected Wallet Connect (Petra, Pontem etc)
       let provider: any = null;
       if (name === "Petra Wallet") {
-        provider = (window as any).aptos || (window as any).petra;
+        provider = (window as any).aptos;
       } else if (name === "Martian Wallet") {
         provider = (window as any).martian;
       } else if (name === "Pontem Wallet") {
@@ -200,7 +200,7 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
     if (walletName) {
       try {
         let provider: any = null;
-        if (walletName === "Petra Wallet") provider = (window as any).aptos || (window as any).petra;
+        if (walletName === "Petra Wallet") provider = (window as any).aptos;
         if (walletName === "Martian Wallet") provider = (window as any).martian;
         if (walletName === "Pontem Wallet") provider = (window as any).pontem;
 
