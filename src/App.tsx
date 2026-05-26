@@ -6,22 +6,24 @@
 import React, { useState, useEffect } from "react";
 import { AptosWalletProvider, useAptosWallet } from "./lib/aptos-wallet";
 import LandingPage from "./components/LandingPage";
-import ProfilePage from "./components/ProfilePage";
 import DashboardPage from "./components/DashboardPage";
 import LeaderboardPage from "./components/LeaderboardPage";
 import FileUploadPage from "./components/FileUploadPage";
 import MarketplacePage from "./components/MarketplacePage";
 import PsychedelicWaterBackground from "./components/PsychedelicWaterBackground";
-import { HardDrive, Key, Trophy, Upload, Layers, User, Coins, LogOut, Menu, X, PlusCircle, ArrowUp } from "lucide-react";
+import { Coins, Menu, X, ArrowUp, Copy, Check } from "lucide-react";
+import { motion, AnimatePresence } from "motion/react";
 
-type ActiveTab = "landing" | "marketplace" | "dashboard" | "upload" | "leaderboard" | "profile";
+type ActiveTab = "landing" | "marketplace" | "dashboard" | "upload" | "leaderboard";
 
 function AppContent() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("landing");
   const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
-  const { connected, address, balance, connect, disconnect, availableWallets, requestFaucet } = useAptosWallet();
+  const { connected, address, balance, shelbyUSDBalance, connect, disconnect, availableWallets } = useAptosWallet();
   const [showWalletMenu, setShowWalletMenu] = useState<boolean>(false);
+  const [showConnectedWalletMenu, setShowConnectedWalletMenu] = useState<boolean>(false);
   const [showGoToTop, setShowGoToTop] = useState<boolean>(false);
+  const [copied, setCopied] = useState<boolean>(false);
 
   useEffect(() => {
     const handleScroll = () => {
@@ -38,7 +40,6 @@ function AppContent() {
   const handleWalletSelect = async (walletName: string) => {
     await connect(walletName);
     setShowWalletMenu(false);
-    // Auto-route to marketplace after successful connect if currently on landing
     if (activeTab === "landing") {
       setActiveTab("marketplace");
     }
@@ -111,119 +112,176 @@ function AppContent() {
     );
   }
 
+  // Define transition motion configuration for premium page transitions
+  const pageTransition = {
+    initial: { opacity: 0, y: 15, filter: "blur(4px)" },
+    animate: { opacity: 1, y: 0, filter: "blur(0px)" },
+    exit: { opacity: 0, y: -15, filter: "blur(4px)" },
+    transition: { duration: 0.35, ease: [0.16, 1, 0.3, 1] }
+  };
+
   return (
     <div className="bg-gradient-to-br from-rose-950 via-[#180a13] to-[#251502] text-white min-h-screen font-sans flex flex-col justify-between selection:bg-pink-500/30 selection:text-white" id="circle-storage-app-root">
+      
       {/* App Specific Header */}
-      <header className="sticky top-0 z-50 bg-black/40 backdrop-blur-md border-b border-white/10" id="main-navigation-bar">
-        <div className="max-w-7xl mx-auto px-6 h-18 flex items-center justify-between">
+      <header className="sticky top-0 z-50 bg-[#0c0308]/50 backdrop-blur-md border-b border-white/10 py-4" id="main-navigation-bar">
+        <div className="max-w-7xl mx-auto px-6 flex items-center justify-between gap-4">
           
-          {/* Left indicator without physical graphic logo */}
-          <div className="text-xs font-mono font-bold tracking-wider text-amber-400 uppercase select-none" id="brand-logo-trigger">
-            Shelby Testnet
+          {/* Top-Left Circular Gradient Logo & Brand redirecting to Landing */}
+          <div 
+            className="flex items-center gap-2.5 cursor-pointer group" 
+            onClick={() => setActiveTab("landing")} 
+            id="brand-logo-trigger"
+          >
+            <div className="flex-shrink-0" id="header-circle-logo-frame">
+              <svg className="w-8 h-8 filter drop-shadow-[0_0_10px_rgba(236,72,153,0.3)] transition-transform duration-300 group-hover:scale-105" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" id="header-premium-logo-svg">
+                <defs>
+                  <linearGradient id="header-logo-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stopColor="#f472b6" /> {/* pink-400 */}
+                    <stop offset="50%" stopColor="#fda4af" /> {/* rose-300 */}
+                    <stop offset="100%" stopColor="#fbbf24" /> {/* amber-400 */}
+                  </linearGradient>
+                </defs>
+                <circle cx="50" cy="50" r="40" stroke="url(#header-logo-gradient)" strokeWidth="10" />
+                <circle cx="50" cy="50" r="23" fill="url(#header-logo-gradient)" />
+              </svg>
+            </div>
+            <span className="text-sm font-bold font-sans tracking-widest text-white/95 group-hover:text-pink-300 transition-colors uppercase hidden sm:inline-block">
+              Circle Storage
+            </span>
           </div>
 
-          {/* Desktop Links */}
-          <nav className="hidden md:flex items-center gap-1.5" id="nav-links-desktop">
+          {/* Desktop Links - styled in separate elegant glassmorphism capsules with slightly larger font sizes */}
+          <nav className="hidden md:flex items-center gap-3.5" id="nav-links-desktop">
             <button
-              onClick={() => setActiveTab("landing")}
-              className="px-3.5 py-2.5 rounded-lg text-xs font-bold font-sans text-white/70 hover:text-pink-400 hover:bg-white/5 transition-colors cursor-pointer"
+              id="btn-nav-upload"
+              onClick={() => setActiveTab("upload")}
+              className={`px-5 py-2.5 text-sm font-bold font-sans rounded-full backdrop-blur-md transition-all duration-300 shadow-sm flex items-center justify-center tracking-wide hover:scale-105 active:scale-95 border ${
+                activeTab === "upload"
+                  ? "bg-pink-500/20 text-white border-pink-500/40 shadow-pink-500/10"
+                  : "text-white/70 bg-black/60 hover:bg-black/85 border-white/10 hover:border-pink-500/30"
+              }`}
             >
-              Exit Console
+              Upload
             </button>
             <button
               id="btn-nav-marketplace"
               onClick={() => setActiveTab("marketplace")}
-              className={`px-3.5 py-2.5 rounded-lg text-xs font-bold font-sans transition-all cursor-pointer ${
-                activeTab === "marketplace" ? "bg-white/10 text-white border border-white/25 shadow-sm" : "text-white/60 hover:text-white hover:bg-white/5"
+              className={`px-5 py-2.5 text-sm font-bold font-sans rounded-full backdrop-blur-md transition-all duration-300 shadow-sm flex items-center justify-center tracking-wide hover:scale-105 active:scale-95 border ${
+                activeTab === "marketplace"
+                  ? "bg-pink-500/20 text-white border-pink-500/40 shadow-pink-500/10"
+                  : "text-white/70 bg-black/60 hover:bg-black/85 border-white/10 hover:border-pink-500/30"
               }`}
             >
               Marketplace
             </button>
             <button
-              id="btn-nav-dashboard"
-              onClick={() => setActiveTab("dashboard")}
-              className={`px-3.5 py-2.5 rounded-lg text-xs font-bold font-sans transition-all cursor-pointer ${
-                activeTab === "dashboard" ? "bg-white/10 text-white border border-white/25 shadow-sm" : "text-white/60 hover:text-white hover:bg-white/5"
-              }`}
-            >
-              Console List
-            </button>
-            <button
-              id="btn-nav-upload"
-              onClick={() => setActiveTab("upload")}
-              className={`px-3.5 py-2.5 rounded-lg text-xs font-bold font-sans transition-all cursor-pointer ${
-                activeTab === "upload" ? "bg-white/10 text-white border border-white/25 shadow-sm" : "text-white/60 hover:text-white hover:bg-white/5"
-              }`}
-            >
-              Upload Asset
-            </button>
-            <button
               id="btn-nav-leaderboard"
               onClick={() => setActiveTab("leaderboard")}
-              className={`px-3.5 py-2.5 rounded-lg text-xs font-bold font-sans transition-all cursor-pointer ${
-                activeTab === "leaderboard" ? "bg-white/10 text-white border border-white/25 shadow-sm" : "text-white/60 hover:text-white hover:bg-white/5"
+              className={`px-5 py-2.5 text-sm font-bold font-sans rounded-full backdrop-blur-md transition-all duration-300 shadow-sm flex items-center justify-center tracking-wide hover:scale-105 active:scale-95 border ${
+                activeTab === "leaderboard"
+                  ? "bg-pink-500/20 text-white border-pink-500/40 shadow-pink-500/10"
+                  : "text-white/70 bg-black/60 hover:bg-black/85 border-white/10 hover:border-pink-500/30"
               }`}
             >
               Leaderboard
             </button>
             <button
-              id="btn-nav-profile"
-              onClick={() => setActiveTab("profile")}
-              className={`px-3.5 py-2.5 rounded-lg text-xs font-bold font-sans transition-all cursor-pointer ${
-                activeTab === "profile" ? "bg-white/10 text-white border border-white/25 shadow-sm" : "text-white/60 hover:text-white hover:bg-white/5"
+              id="btn-nav-dashboard"
+              onClick={() => setActiveTab("dashboard")}
+              className={`px-5 py-2.5 text-sm font-bold font-sans rounded-full backdrop-blur-md transition-all duration-300 shadow-sm flex items-center justify-center tracking-wide hover:scale-105 active:scale-95 border ${
+                activeTab === "dashboard"
+                  ? "bg-pink-500/20 text-white border-pink-500/40 shadow-pink-500/10"
+                  : "text-white/70 bg-black/60 hover:bg-black/85 border-white/10 hover:border-pink-500/30"
               }`}
             >
-              Profile
+              Dashboard
             </button>
           </nav>
 
-          {/* Wallet Actions / Faucet block */}
-          <div className="hidden md:flex items-center gap-3" id="wallet-toolbar-desktop">
+          {/* Desktop Wallet connection pill */}
+          <div className="hidden md:flex items-center gap-3 relative" id="wallet-toolbar-desktop">
             {connected && address ? (
-              <div className="flex items-center gap-2">
-                {/* Faucet trigger */}
+              <div className="relative">
                 <button
-                  id="btn-wallet-faucet"
-                  onClick={requestFaucet}
-                  className="px-3 py-2 bg-white/5 hover:bg-white/10 text-white rounded-lg text-[10px] font-mono border border-white/15 flex items-center gap-1 cursor-pointer transition-colors shadow-sm"
-                  title="Claim +5 APT Faucet Tokens"
+                  id="btn-connected-wallet-dropdown-trigger"
+                  onClick={() => setShowConnectedWalletMenu(!showConnectedWalletMenu)}
+                  className="px-5 py-2.5 bg-black/45 hover:bg-black/75 border border-white/15 hover:border-pink-500/35 rounded-full flex items-center gap-2.5 text-sm font-bold font-sans shadow-sm backdrop-blur-md cursor-pointer transition-all active:scale-95"
                 >
-                  <PlusCircle className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
-                  Faucet
-                </button>
-
-                {/* Balance & Address pill */}
-                <div className="bg-black/20 border border-white/15 rounded-xl px-3 py-2 flex items-center gap-3.5 text-xs font-sans shadow-sm">
-                  <span className="font-mono text-white flex items-center gap-1 font-bold">
-                    <Coins className="w-3.5 h-3.5 text-amber-400" />
-                    {balance.toFixed(2)} APT
-                  </span>
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-                  <span className="text-white font-mono text-[11px] select-all uppercase font-semibold">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                  <span className="text-white font-mono uppercase font-semibold">
                     {truncateAddress(address)}
                   </span>
-                  <button
-                    onClick={disconnect}
-                    className="p-1 hover:text-red-400 text-white/50 cursor-pointer transition-colors focus:outline-none"
-                    title="Disconnect Wallet"
-                  >
-                    <LogOut className="w-3.5 h-3.5" />
-                  </button>
-                </div>
+                </button>
+                
+                {showConnectedWalletMenu && (
+                  <div className="absolute right-0 mt-3 w-72 bg-[#1c0b16]/95 backdrop-blur-xl border border-white/15 rounded-2xl shadow-2xl p-4.5 z-50 space-y-4" id="connected-wallet-dropdown-menu">
+                    <div className="border-b border-white/10 pb-3">
+                      <p className="text-[10px] uppercase font-mono text-white/40 tracking-widest font-bold">Connected Address</p>
+                      <div className="flex items-center justify-between gap-2 mt-2 bg-black/35 p-2 px-3 rounded-xl border border-white/5">
+                        <span className="text-white font-mono text-xs uppercase" title={address}>
+                          {truncateAddress(address)}
+                        </span>
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(address);
+                            setCopied(true);
+                            setTimeout(() => setCopied(false), 2000);
+                          }}
+                          className="p-1.5 hover:bg-white/5 rounded-lg text-pink-400 hover:text-pink-300 transition-all flex items-center justify-center cursor-pointer"
+                          title="Copy Full Address"
+                        >
+                          {copied ? (
+                            <Check className="w-3.5 h-3.5 text-emerald-400" />
+                          ) : (
+                            <Copy className="w-3.5 h-3.5 text-pink-400 hover:scale-105 active:scale-95" />
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                    
+                    <div className="space-y-3 font-sans">
+                      <div className="flex items-center justify-between text-xs sm:text-sm">
+                        <span className="text-white/60">APT Balance:</span>
+                        <span className="font-mono text-white flex items-center gap-1.5 font-bold">
+                          <Coins className="w-4 h-4 text-amber-500" />
+                          {balance.toFixed(2)} APT
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between text-xs sm:text-sm">
+                        <span className="text-white/60">ShelbyUSD Balance:</span>
+                        <span className="font-mono text-pink-400 flex items-center gap-1.5 font-bold">
+                          <span className="text-xs uppercase bg-pink-950/40 text-pink-400 px-1.5 py-0.5 rounded border border-pink-500/20 font-sans tracking-wider">SUSD</span>
+                          ${shelbyUSDBalance.toFixed(2)}
+                        </span>
+                      </div>
+                    </div>
+                    
+                    <button
+                      onClick={() => {
+                        disconnect();
+                        setShowConnectedWalletMenu(false);
+                      }}
+                      className="w-full py-2.5 bg-red-950/45 text-red-400 hover:bg-red-900/40 border border-red-900/30 rounded-xl text-xs sm:text-sm font-bold font-sans cursor-pointer transition-colors"
+                    >
+                      Disconnect Wallet
+                    </button>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="relative">
                 <button
                   id="btn-connect-wallet-trigger"
                   onClick={() => setShowWalletMenu(!showWalletMenu)}
-                  className="px-5 py-2.5 bg-gradient-to-r from-pink-500 to-amber-500 hover:from-pink-400 hover:to-amber-400 text-white font-sans font-bold text-xs rounded-xl cursor-pointer flex items-center gap-1.5 transition-all shadow-md active:scale-95 border border-white/10"
+                  className="px-5 py-2.5 bg-gradient-to-r from-pink-500 to-amber-500 hover:from-pink-400 hover:to-amber-400 text-white font-sans font-bold text-sm rounded-full cursor-pointer flex items-center gap-1.5 transition-all shadow-md active:scale-95 border border-white/10"
                 >
-                  <Coins className="w-3.5 h-3.5" />
-                  Connect Aptos Wallet
+                  <Coins className="w-4 h-4" />
+                  Connect Wallet
                 </button>
                 {showWalletMenu && (
-                  <div className="absolute right-0 mt-2.5 w-52 bg-[#1a0a14] border border-white/15 rounded-xl shadow-xl p-2.5 z-50 text-xs text-left" id="wallet-dropdown-menu">
-                    <p className="text-[10px] font-mono text-white/50 uppercase tracking-widest p-1.5">Select Aptos Wallet</p>
+                  <div className="absolute right-0 mt-3 w-56 bg-[#1a0a14] border border-white/15 rounded-2xl shadow-xl p-3 z-50 text-sm text-left" id="wallet-dropdown-menu">
+                    <p className="text-[10px] font-mono text-white/50 uppercase tracking-widest p-1.5 font-bold">Select Wallet</p>
                     {availableWallets.map((wallet) => (
                       <button
                         key={wallet}
@@ -240,7 +298,7 @@ function AppContent() {
             )}
           </div>
 
-          {/* Mobile responsive menu button */}
+          {/* Mobile responsive navigation trigger */}
           <button
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
             className="md:hidden p-2 text-white/70 hover:text-white flex items-center focus:outline-none"
@@ -251,83 +309,71 @@ function AppContent() {
 
         {/* Mobile menu panel */}
         {mobileMenuOpen && (
-          <div className="md:hidden border-t border-white/10 bg-[#160811] py-4 px-6 space-y-3 font-sans shadow-lg" id="nav-links-mobile">
+          <div className="md:hidden border-t border-white/10 bg-[#160811] py-4 px-6 space-y-3 font-sans shadow-lg pb-6" id="nav-links-mobile">
             <button
-              onClick={() => { setActiveTab("landing"); setMobileMenuOpen(false); }}
-              className="block w-full text-left px-3 py-2 rounded-lg text-sm text-white/80 font-bold"
+              onClick={() => { setActiveTab("upload"); setMobileMenuOpen(false); }}
+              className={`block w-full text-left px-5 py-3 rounded-full text-sm font-bold ${activeTab === "upload" ? "text-white bg-pink-500/20 border border-pink-500/30" : "text-white/70 bg-black/40"}`}
             >
-              Exit Console
+              Upload
             </button>
             <button
               onClick={() => { setActiveTab("marketplace"); setMobileMenuOpen(false); }}
-              className={`block w-full text-left px-3 py-2 rounded-lg text-sm font-bold ${activeTab === "marketplace" ? "text-pink-400 bg-white/10" : "text-white/70"}`}
+              className={`block w-full text-left px-5 py-3 rounded-full text-sm font-bold ${activeTab === "marketplace" ? "text-white bg-pink-500/20 border border-pink-500/30" : "text-white/70 bg-black/40"}`}
             >
               Marketplace
             </button>
             <button
-              onClick={() => { setActiveTab("dashboard"); setMobileMenuOpen(false); }}
-              className={`block w-full text-left px-3 py-2 rounded-lg text-sm font-bold ${activeTab === "dashboard" ? "text-pink-400 bg-white/10" : "text-white/70"}`}
-            >
-              Console List
-            </button>
-            <button
-              onClick={() => { setActiveTab("upload"); setMobileMenuOpen(false); }}
-              className={`block w-full text-left px-3 py-2 rounded-lg text-sm font-bold ${activeTab === "upload" ? "text-pink-400 bg-white/10" : "text-white/70"}`}
-            >
-              Upload Asset
-            </button>
-            <button
               onClick={() => { setActiveTab("leaderboard"); setMobileMenuOpen(false); }}
-              className={`block w-full text-left px-3 py-2 rounded-lg text-sm font-bold ${activeTab === "leaderboard" ? "text-pink-400 bg-white/10" : "text-white/70"}`}
+              className={`block w-full text-left px-5 py-3 rounded-full text-sm font-bold ${activeTab === "leaderboard" ? "text-white bg-pink-500/20 border border-pink-500/30" : "text-white/70 bg-black/40"}`}
             >
               Leaderboard
             </button>
             <button
-              onClick={() => { setActiveTab("profile"); setMobileMenuOpen(false); }}
-              className={`block w-full text-left px-3 py-2 rounded-lg text-sm font-bold ${activeTab === "profile" ? "text-pink-400 bg-white/10" : "text-white/70"}`}
+              onClick={() => { setActiveTab("dashboard"); setMobileMenuOpen(false); }}
+              className={`block w-full text-left px-5 py-3 rounded-full text-sm font-bold ${activeTab === "dashboard" ? "text-white bg-pink-500/20 border border-pink-500/30" : "text-white/70 bg-black/40"}`}
             >
-              Profile
+              Dashboard
             </button>
 
-            {/* Faucet / Wallet for mobile */}
+            {/* Wallet actions drawer on mobile */}
             <div className="pt-4 border-t border-white/10 flex flex-col gap-3">
               {connected && address ? (
                 <div className="space-y-2 text-xs">
                   <div className="flex items-center justify-between text-white/70 px-3 font-mono">
-                    <span>Balance:</span>
-                    <span className="font-bold flex items-center gap-1 text-amber-400">
+                    <span>APT Balance:</span>
+                    <span className="font-bold flex items-center gap-1.5 text-amber-400">
                       <Coins className="w-3.5 h-3.5 text-amber-400" />
                       {balance.toFixed(2)} APT
                     </span>
                   </div>
                   <div className="flex items-center justify-between text-white/70 px-3 font-mono">
-                    <span>Wallet:</span>
+                    <span>ShelbyUSD Balance:</span>
+                    <span className="font-bold flex items-center gap-1.5 text-pink-400">
+                      <span className="text-[9px] uppercase bg-pink-950/40 text-pink-400 px-1 py-0.5 rounded border border-pink-500/20 font-sans tracking-wider">SUSD</span>
+                      ${shelbyUSDBalance.toFixed(2)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-white/70 px-3 font-mono">
+                    <span>Address:</span>
                     <span className="font-semibold select-all text-xs text-white uppercase">{truncateAddress(address)}</span>
                   </div>
-                  <div className="flex items-center gap-2 pt-2">
+                  <div className="pt-2">
                     <button
-                      onClick={requestFaucet}
-                      className="flex-1 py-2.5 bg-white/5 hover:bg-white/10 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1 cursor-pointer transition-colors border border-white/10"
+                      onClick={() => { disconnect(); setMobileMenuOpen(false); }}
+                      className="w-full py-2.5 bg-red-950/45 text-red-400 hover:bg-red-900/40 border border-red-900/30 rounded-xl text-xs sm:text-sm font-bold cursor-pointer"
                     >
-                      <PlusCircle className="w-3.5 h-3.5 text-amber-400" />
-                      Faucet +5 APT
-                    </button>
-                    <button
-                      onClick={disconnect}
-                      className="py-2.5 px-4 bg-red-950/45 text-red-400 hover:bg-red-900/40 border border-red-900/30 rounded-lg text-xs font-bold cursor-pointer"
-                    >
-                      Disconnect
+                      Disconnect Wallet
                     </button>
                   </div>
                 </div>
               ) : (
-                <div className="space-y-2">
-                  <p className="text-[10px] uppercase font-mono text-white/50 px-3">Choose Wallet</p>
+                <div className="space-y-2 text-center">
+                  <p className="text-[10px] uppercase font-mono text-white/50 px-3 text-left">Choose Wallet</p>
                   {availableWallets.map((wallet) => (
                     <button
                       key={wallet}
-                      onClick={() => handleWalletSelect(wallet)}
-                      className="w-full text-left px-4 py-2 bg-white/5 hover:bg-white/10 text-white/90 rounded-lg text-xs transition-colors flex items-center gap-2"
+                      onClick={() => { handleWalletSelect(wallet); setMobileMenuOpen(false); }}
+                      className="w-full text-left px-4 py-2 bg-white/5 hover:bg-white/10 text-white/90 rounded-xl text-xs transition-colors flex items-center gap-2"
                     >
                       <span className="w-2 h-2 rounded-full bg-pink-500"></span>
                       {wallet}
@@ -340,24 +386,60 @@ function AppContent() {
         )}
       </header>
 
-      {/* Main Body Dynamic Rendering */}
+      {/* Main Body with Classy Page Smooth Entrance Transition */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-6 py-12" id="main-content-canvas">
-        {activeTab === "marketplace" && <MarketplacePage />}
-        {activeTab === "dashboard" && <DashboardPage />}
-        {activeTab === "upload" && <FileUploadPage />}
-        {activeTab === "leaderboard" && <LeaderboardPage />}
-        {activeTab === "profile" && <ProfilePage />}
+        <AnimatePresence mode="wait">
+          {activeTab === "marketplace" && (
+            <motion.div
+              key="marketplace"
+              initial={pageTransition.initial}
+              animate={pageTransition.animate}
+              exit={pageTransition.exit}
+              transition={pageTransition.transition}
+            >
+              <MarketplacePage />
+            </motion.div>
+          )}
+
+          {activeTab === "dashboard" && (
+            <motion.div
+              key="dashboard"
+              initial={pageTransition.initial}
+              animate={pageTransition.animate}
+              exit={pageTransition.exit}
+              transition={pageTransition.transition}
+            >
+              <DashboardPage />
+            </motion.div>
+          )}
+
+          {activeTab === "upload" && (
+            <motion.div
+              key="upload"
+              initial={pageTransition.initial}
+              animate={pageTransition.animate}
+              exit={pageTransition.exit}
+              transition={pageTransition.transition}
+            >
+              <FileUploadPage />
+            </motion.div>
+          )}
+
+          {activeTab === "leaderboard" && (
+            <motion.div
+              key="leaderboard"
+              initial={pageTransition.initial}
+              animate={pageTransition.animate}
+              exit={pageTransition.exit}
+              transition={pageTransition.transition}
+            >
+              <LeaderboardPage />
+            </motion.div>
+          )}
+        </AnimatePresence>
       </main>
 
-      {/* Persistent Web3 footer */}
-      <footer className="py-6 border-t border-white/10 bg-black/20 text-center text-[11px] text-white/50 font-mono tracking-wide" id="global-footer">
-        <div className="max-w-7xl mx-auto px-6 flex flex-col sm:flex-row items-center justify-between gap-4">
-          <p>© 2026 Circle Storage. All uploads are end-to-end client-side encrypted before hosting.</p>
-          <p className="text-[10px] text-white/40">Aptos Shelby Testnet • Pink & Gold Premium Console</p>
-        </div>
-      </footer>
-
-      {/* Go To Top floating capsule for the app workspace */}
+      {/* Go To Top floating capsule for the workspace */}
       {showGoToTop && (
         <button
           onClick={scrollToTop}
