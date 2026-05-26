@@ -20,6 +20,25 @@ export default function LandingPage({ onEnterApp }: LandingPageProps) {
     }
   };
 
+  const sectionRevealVariants = {
+    hidden: { 
+      opacity: 0, 
+      y: 40, 
+      filter: "blur(12px)", 
+      scale: 0.98 
+    },
+    visible: { 
+      opacity: 1, 
+      y: 0, 
+      filter: "blur(0px)",
+      scale: 1,
+      transition: { 
+        duration: 0.8, 
+        ease: [0.16, 1, 0.3, 1] 
+      }
+    }
+  };
+
   return (
     <div className="bg-transparent text-white font-sans max-w-7xl mx-auto" id="landing-page-root">
       {/* Hero Section */}
@@ -29,23 +48,32 @@ export default function LandingPage({ onEnterApp }: LandingPageProps) {
         
         <div className="max-w-7xl mx-auto px-6 lg:px-8 relative z-10 text-center">
           <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ duration: 0.6 }}
-            className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full border border-pink-500/20 bg-pink-950/40 text-pink-300 text-xs font-mono tracking-wider uppercase mb-8"
-          >
-            <span className="w-1.5 h-1.5 rounded-full bg-pink-500 animate-pulse"></span>
-            Shelby Testnet Integration Active
-          </motion.div>
-
-          <motion.h1 
             initial={{ opacity: 0, y: -20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6, delay: 0.1 }}
-            className="text-4xl sm:text-6xl font-sans font-bold tracking-tight text-white max-w-4xl mx-auto leading-tight"
+            className="flex flex-row items-center justify-center gap-4 sm:gap-7 max-w-4xl mx-auto mb-6 flex-wrap sm:flex-nowrap"
           >
-            Circle Storage on <span className="text-transparent bg-clip-text bg-gradient-to-r from-pink-400 via-rose-300 to-amber-400">Aptos Blockchain</span>
-          </motion.h1>
+            {/* Elegant premium circular logo with gradient applied */}
+            <div className="flex-shrink-0" id="landing-hero-circle-logo-frame">
+              <svg className="w-16 h-16 sm:w-24 sm:h-24 filter drop-shadow-[0_0_25px_rgba(236,72,153,0.3)]" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" id="hero-premium-logo-svg">
+                <defs>
+                  <linearGradient id="circle-storage-logo-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stopColor="#f472b6" /> {/* pink-400 */}
+                    <stop offset="50%" stopColor="#fda4af" /> {/* rose-300 */}
+                    <stop offset="100%" stopColor="#fbbf24" /> {/* amber-400 */}
+                  </linearGradient>
+                </defs>
+                {/* Outer ring - enclosed, thick & premium */}
+                <circle cx="50" cy="50" r="40" stroke="url(#circle-storage-logo-gradient)" strokeWidth="10" />
+                {/* Thick solid inner circle detail */}
+                <circle cx="50" cy="50" r="23" fill="url(#circle-storage-logo-gradient)" />
+              </svg>
+            </div>
+            
+            <h1 className="text-4xl sm:text-7xl font-sans font-bold tracking-tight text-white leading-tight">
+              Circle Storage
+            </h1>
+          </motion.div>
 
           <motion.p
             initial={{ opacity: 0, y: 15 }}
@@ -67,38 +95,33 @@ export default function LandingPage({ onEnterApp }: LandingPageProps) {
               onClick={onEnterApp}
               className="px-8 py-4 bg-gradient-to-r from-pink-500 to-amber-500 hover:from-pink-400 hover:to-amber-400 text-white font-bold font-sans rounded-xl shadow-lg shadow-pink-500/10 cursor-pointer flex items-center gap-2 group transition-all"
             >
-              Enter Console
+              Launch App
               <ArrowRight className="w-4 h-4 text-white group-hover:translate-x-1 transition-transform" />
             </button>
-            <a
-              href="#how-it-works-section"
-              className="px-6 py-4 border border-white/10 bg-white/5 hover:bg-white/10 text-white font-sans rounded-xl transition-all font-bold text-sm shadow-sm"
-            >
-              Explore Protocol Flow
-            </a>
           </motion.div>
         </div>
       </section>
 
       {/* Use Cases Section */}
-      <section className="py-20 px-6 lg:px-8 border-t border-white/10" id="use-cases-section">
-        <motion.div 
-          variants={containerVariants}
-          initial="hidden"
-          whileInView="visible"
-          viewport={{ once: true }}
-          className="text-center mb-16"
-        >
+      <motion.section 
+        className="py-20 px-6 lg:px-8 border-t border-white/10" 
+        id="use-cases-section"
+        initial="hidden"
+        whileInView="visible"
+        viewport={{ once: false, amount: 0.15 }}
+        variants={sectionRevealVariants}
+      >
+        <div className="text-center mb-16">
           <h2 className="text-3xl font-sans font-bold tracking-tight text-white mb-4">
             Industrial Web3 Use Cases
           </h2>
           <p className="text-white/60 font-sans max-w-2xl mx-auto text-sm sm:text-base">
             Circle Storage bridges Aptos high-throughput payment confirmation and Shelby decentralized file leasing to serve production-ready file verification.
           </p>
-        </motion.div>
+        </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-          <div className="bg-black/30 border border-white/10 p-8 rounded-2xl hover:border-pink-500/30 transition-all flex flex-col gap-4 shadow-xl">
+          <div className="bg-black/60 backdrop-blur-md border border-white/10 p-8 rounded-2xl hover:border-pink-500/40 hover:bg-black/75 transition-all duration-300 flex flex-col gap-4 shadow-2xl">
             <div className="w-12 h-12 rounded-xl bg-pink-950/50 flex items-center justify-center text-pink-400 border border-pink-500/20">
               <Shield className="w-6 h-6" />
             </div>
@@ -108,7 +131,7 @@ export default function LandingPage({ onEnterApp }: LandingPageProps) {
             </p>
           </div>
 
-          <div className="bg-black/30 border border-white/10 p-8 rounded-2xl hover:border-pink-500/30 transition-all flex flex-col gap-4 shadow-xl">
+          <div className="bg-black/60 backdrop-blur-md border border-white/10 p-8 rounded-2xl hover:border-pink-500/40 hover:bg-black/75 transition-all duration-300 flex flex-col gap-4 shadow-2xl">
             <div className="w-12 h-12 rounded-xl bg-amber-950/50 flex items-center justify-center text-amber-400 border border-amber-500/20">
               <Cpu className="w-6 h-6" />
             </div>
@@ -118,7 +141,7 @@ export default function LandingPage({ onEnterApp }: LandingPageProps) {
             </p>
           </div>
 
-          <div className="bg-black/30 border border-white/10 p-8 rounded-2xl hover:border-pink-500/30 transition-all flex flex-col gap-4 shadow-xl">
+          <div className="bg-black/60 backdrop-blur-md border border-white/10 p-8 rounded-2xl hover:border-pink-500/40 hover:bg-black/75 transition-all duration-300 flex flex-col gap-4 shadow-2xl">
             <div className="w-12 h-12 rounded-xl bg-rose-950/50 flex items-center justify-center text-rose-400 border border-rose-500/20">
               <HardDrive className="w-6 h-6" />
             </div>
@@ -128,10 +151,17 @@ export default function LandingPage({ onEnterApp }: LandingPageProps) {
             </p>
           </div>
         </div>
-      </section>
+      </motion.section>
 
       {/* How It Works Section */}
-      <section className="py-20 px-6 lg:px-8 border-t border-white/10" id="how-it-works-section">
+      <motion.section 
+        className="py-20 px-6 lg:px-8 border-t border-white/10" 
+        id="how-it-works-section"
+        initial="hidden"
+        whileInView="visible"
+        viewport={{ once: false, amount: 0.15 }}
+        variants={sectionRevealVariants}
+      >
         <div className="text-center mb-16">
           <h2 className="text-3xl font-sans font-bold tracking-tight text-white mb-4">
             Under the Hood: Shelby Protocol Flow
@@ -142,51 +172,74 @@ export default function LandingPage({ onEnterApp }: LandingPageProps) {
         </div>
 
         <div className="relative">
-          {/* Connector Line */}
-          <div className="absolute top-1/2 left-4 right-4 h-[1px] bg-gradient-to-r from-pink-500/10 via-amber-500/20 to-pink-500/10 transform -translate-y-1/2 hidden md:block z-0"></div>
+          {/* Connector Line - elegant, thin, sleek line acting as a segment separator */}
+          <div className="absolute top-[44px] left-[12%] right-[12%] h-[1.5px] bg-gradient-to-r from-pink-500/20 via-amber-500/40 to-emerald-500/20 hidden md:block z-0"></div>
 
           <div className="grid grid-cols-1 md:grid-cols-4 gap-8 relative z-10">
-            <div className="bg-black/40 p-6 rounded-2xl border border-white/10 shadow-xl text-center flex flex-col gap-3">
-              <div className="w-10 h-10 rounded-full bg-pink-950/60 border border-pink-500/20 text-pink-400 flex items-center justify-center mx-auto text-xs font-mono font-bold">1</div>
-              <div className="mx-auto text-pink-400 my-1"><Key className="w-5 h-5" /></div>
-              <h4 className="text-base font-bold text-white">Client Side Encrypt</h4>
-              <p className="text-xs text-white/70 leading-normal">
-                Files are compressed and encrypted locally inside the web browser using symmetric AES-256 techniques prior to transit.
-              </p>
+            <div className="bg-black/60 backdrop-blur-md p-6 rounded-2xl border border-white/10 hover:border-pink-500/40 hover:bg-black/75 transition-all duration-300 shadow-2xl text-center flex flex-col items-center gap-4">
+              <div className="w-12 h-12 rounded-full bg-black/80 border border-pink-500/30 text-pink-400 flex items-center justify-center shadow-lg shadow-pink-500/10 z-10">
+                <Key className="w-5 h-5" />
+              </div>
+              <div className="w-full text-center">
+                <h4 className="text-base font-bold text-white font-sans">Client Side Encrypt</h4>
+                <div className="h-[1px] w-12 bg-white/10 mx-auto my-3"></div>
+                <p className="text-xs text-white/70 leading-relaxed font-sans">
+                  Files are compressed and encrypted locally inside the web browser using symmetric AES-256 techniques prior to transit.
+                </p>
+              </div>
             </div>
 
-            <div className="bg-black/40 p-6 rounded-2xl border border-white/10 shadow-xl text-center flex flex-col gap-3">
-              <div className="w-10 h-10 rounded-full bg-amber-950/60 border border-amber-500/20 text-amber-400 flex items-center justify-center mx-auto text-xs font-mono font-bold">2</div>
-              <div className="mx-auto text-amber-400 my-1"><Server className="w-5 h-5" /></div>
-              <h4 className="text-base font-bold text-white">Shelby Node Anchor</h4>
-              <p className="text-xs text-white/70 leading-normal">
-                Encrypted payload is dispatched and anchored onto Shelby nodes using on-chain storage lease vouchers. Returns Shelby hash.
-              </p>
+            <div className="bg-black/60 backdrop-blur-md p-6 rounded-2xl border border-white/10 hover:border-pink-500/40 hover:bg-black/75 transition-all duration-300 shadow-2xl text-center flex flex-col items-center gap-4">
+              <div className="w-12 h-12 rounded-full bg-black/80 border border-amber-500/30 text-amber-400 flex items-center justify-center shadow-lg shadow-amber-500/10 z-10">
+                <Server className="w-5 h-5" />
+              </div>
+              <div className="w-full text-center">
+                <h4 className="text-base font-bold text-white font-sans">Shelby Node Anchor</h4>
+                <div className="h-[1px] w-12 bg-white/10 mx-auto my-3"></div>
+                <p className="text-xs text-white/70 leading-relaxed font-sans">
+                  Encrypted payload is dispatched and anchored onto Shelby nodes using on-chain storage lease vouchers. Returns Shelby hash.
+                </p>
+              </div>
             </div>
 
-            <div className="bg-black/40 p-6 rounded-2xl border border-white/10 shadow-xl text-center flex flex-col gap-3">
-              <div className="w-10 h-10 rounded-full bg-rose-950/60 border border-rose-500/20 text-rose-400 flex items-center justify-center mx-auto text-xs font-mono font-bold">3</div>
-              <div className="mx-auto text-rose-400 my-1"><Coins className="w-5 h-5" /></div>
-              <h4 className="text-base font-bold text-white">Direct Web3 Tx</h4>
-              <p className="text-xs text-white/70 leading-normal">
-                Buyer executes direct peer-to-peer APT transaction to uploader's address using standard Aptos wallet signatures.
-              </p>
+            <div className="bg-black/60 backdrop-blur-md p-6 rounded-2xl border border-white/10 hover:border-pink-500/40 hover:bg-black/75 transition-all duration-300 shadow-2xl text-center flex flex-col items-center gap-4">
+              <div className="w-12 h-12 rounded-full bg-black/80 border border-rose-500/30 text-rose-400 flex items-center justify-center shadow-lg shadow-rose-500/10 z-10">
+                <Coins className="w-5 h-5" />
+              </div>
+              <div className="w-full text-center">
+                <h4 className="text-base font-bold text-white font-sans">Direct Web3 Tx</h4>
+                <div className="h-[1px] w-12 bg-white/10 mx-auto my-3"></div>
+                <p className="text-xs text-white/70 leading-relaxed font-sans">
+                  Buyer executes direct peer-to-peer APT transaction to uploader's address using standard Aptos wallet signatures.
+                </p>
+              </div>
             </div>
 
-            <div className="bg-black/40 p-6 rounded-2xl border border-white/10 shadow-xl text-center flex flex-col gap-3">
-              <div className="w-10 h-10 rounded-full bg-emerald-950/60 border border-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto text-xs font-mono font-bold">4</div>
-              <div className="mx-auto text-emerald-400 my-1"><Shield className="w-5 h-5" /></div>
-              <h4 className="text-base font-bold text-white">Server Verification</h4>
-              <p className="text-xs text-white/70 leading-normal">
-                Express gateway verifies receipt of the transaction hash on-chain, serving decrypted files only after payment validation.
-              </p>
+            <div className="bg-black/60 backdrop-blur-md p-6 rounded-2xl border border-white/10 hover:border-pink-500/40 hover:bg-black/75 transition-all duration-300 shadow-2xl text-center flex flex-col items-center gap-4">
+              <div className="w-12 h-12 rounded-full bg-black/80 border border-emerald-500/30 text-emerald-400 flex items-center justify-center shadow-lg shadow-emerald-500/10 z-10">
+                <Shield className="w-5 h-5" />
+              </div>
+              <div className="w-full text-center">
+                <h4 className="text-base font-bold text-white font-sans">Server Verification</h4>
+                <div className="h-[1px] w-12 bg-white/10 mx-auto my-3"></div>
+                <p className="text-xs text-white/70 leading-relaxed font-sans">
+                  Express gateway verifies receipt of the transaction hash on-chain, serving decrypted files only after payment validation.
+                </p>
+              </div>
             </div>
           </div>
         </div>
-      </section>
+      </motion.section>
 
       {/* FAQ Section */}
-      <section className="py-20 px-6 max-w-4xl mx-auto border-t border-white/10" id="faq-section">
+      <motion.section 
+        className="py-20 px-6 max-w-4xl mx-auto border-t border-white/10" 
+        id="faq-section"
+        initial="hidden"
+        whileInView="visible"
+        viewport={{ once: false, amount: 0.15 }}
+        variants={sectionRevealVariants}
+      >
         <div className="text-center mb-16">
           <h2 className="text-3xl font-sans font-bold tracking-tight text-white mb-4">
             Frequently Answered Concerns
@@ -197,7 +250,7 @@ export default function LandingPage({ onEnterApp }: LandingPageProps) {
         </div>
 
         <div className="flex flex-col gap-5" id="faq-content-container">
-          <div className="bg-black/40 p-6 rounded-2xl border border-white/10 flex gap-4 shadow-xl">
+          <div className="bg-black/60 backdrop-blur-md p-6 rounded-2xl border border-white/10 hover:border-pink-500/40 hover:bg-black/75 transition-all duration-300 flex gap-4 shadow-2xl">
             <div className="text-pink-400 mt-1"><HelpCircle className="w-5 h-5 flex-shrink-0" /></div>
             <div>
               <h4 className="font-bold text-white mb-2 font-sans text-sm sm:text-base">What represents the Shelby Testnet Layer?</h4>
@@ -207,7 +260,7 @@ export default function LandingPage({ onEnterApp }: LandingPageProps) {
             </div>
           </div>
 
-          <div className="bg-black/40 p-6 rounded-2xl border border-white/10 flex gap-4 shadow-xl">
+          <div className="bg-black/60 backdrop-blur-md p-6 rounded-2xl border border-white/10 hover:border-pink-500/40 hover:bg-black/75 transition-all duration-300 flex gap-4 shadow-2xl">
             <div className="text-pink-400 mt-1"><HelpCircle className="w-5 h-5 flex-shrink-0" /></div>
             <div>
               <h4 className="font-bold text-white mb-2 font-sans text-sm sm:text-base">Can someone bypass payment if they possess the Shelby Hash?</h4>
@@ -217,7 +270,7 @@ export default function LandingPage({ onEnterApp }: LandingPageProps) {
             </div>
           </div>
 
-          <div className="bg-black/40 p-6 rounded-2xl border border-white/10 flex gap-4 shadow-xl">
+          <div className="bg-black/60 backdrop-blur-md p-6 rounded-2xl border border-white/10 hover:border-pink-500/40 hover:bg-black/75 transition-all duration-300 flex gap-4 shadow-2xl">
             <div className="text-pink-400 mt-1"><HelpCircle className="w-5 h-5 flex-shrink-0" /></div>
             <div>
               <h4 className="font-bold text-white mb-2 font-sans text-sm sm:text-base">How does lease duration impact file preservation?</h4>
@@ -227,7 +280,7 @@ export default function LandingPage({ onEnterApp }: LandingPageProps) {
             </div>
           </div>
 
-          <div className="bg-black/40 p-6 rounded-2xl border border-white/10 flex gap-4 shadow-xl">
+          <div className="bg-black/60 backdrop-blur-md p-6 rounded-2xl border border-white/10 hover:border-pink-500/40 hover:bg-black/75 transition-all duration-300 flex gap-4 shadow-2xl">
             <div className="text-pink-400 mt-1"><HelpCircle className="w-5 h-5 flex-shrink-0" /></div>
             <div>
               <h4 className="font-bold text-white mb-2 font-sans text-sm sm:text-base">Why are Supabase API keys placed server-side?</h4>
@@ -237,7 +290,7 @@ export default function LandingPage({ onEnterApp }: LandingPageProps) {
             </div>
           </div>
         </div>
-      </section>
+      </motion.section>
     </div>
   );
 }

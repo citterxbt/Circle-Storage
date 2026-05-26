@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { AptosWalletProvider, useAptosWallet } from "./lib/aptos-wallet";
 import LandingPage from "./components/LandingPage";
 import ProfilePage from "./components/ProfilePage";
@@ -11,7 +11,8 @@ import DashboardPage from "./components/DashboardPage";
 import LeaderboardPage from "./components/LeaderboardPage";
 import FileUploadPage from "./components/FileUploadPage";
 import MarketplacePage from "./components/MarketplacePage";
-import { HardDrive, Key, Trophy, Upload, Layers, User, Coins, LogOut, Menu, X, PlusCircle } from "lucide-react";
+import PsychedelicWaterBackground from "./components/PsychedelicWaterBackground";
+import { HardDrive, Key, Trophy, Upload, Layers, User, Coins, LogOut, Menu, X, PlusCircle, ArrowUp } from "lucide-react";
 
 type ActiveTab = "landing" | "marketplace" | "dashboard" | "upload" | "leaderboard" | "profile";
 
@@ -20,6 +21,19 @@ function AppContent() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
   const { connected, address, balance, connect, disconnect, availableWallets, requestFaucet } = useAptosWallet();
   const [showWalletMenu, setShowWalletMenu] = useState<boolean>(false);
+  const [showGoToTop, setShowGoToTop] = useState<boolean>(false);
+
+  useEffect(() => {
+    const handleScroll = () => {
+      setShowGoToTop(window.scrollY > 300);
+    };
+    window.addEventListener("scroll", handleScroll);
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, []);
+
+  const scrollToTop = () => {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
 
   const handleWalletSelect = async (walletName: string) => {
     await connect(walletName);
@@ -36,54 +50,63 @@ function AppContent() {
 
   if (activeTab === "landing") {
     return (
-      <div className="bg-gradient-to-br from-rose-950 via-[#180a13] to-[#251502] text-white min-h-screen font-sans flex flex-col justify-between selection:bg-pink-500/30 selection:text-white" id="circle-storage-landing-root">
-        {/* Landing Navigation Header - Premium Blended Styling */}
-        <header className="sticky top-0 z-50 bg-black/40 backdrop-blur-md border-b border-white/10" id="landing-navigation-bar">
-          <div className="max-w-7xl mx-auto px-6 h-18 flex items-center justify-between">
-            {/* Logo Brand in Pink & Gold */}
-            <div className="flex items-center gap-2.5 text-left" id="landing-brand-logo">
-              <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-pink-500 via-rose-400 to-amber-500 flex items-center justify-center shadow-md shadow-pink-500/15">
-                <HardDrive className="w-5 h-5 text-white" />
-              </div>
-              <div>
-                <span className="text-sm font-sans font-bold tracking-tight text-white block leading-none">Circle Storage</span>
-                <span className="text-[9px] font-mono text-amber-400 font-bold uppercase tracking-wider block mt-1">Shelby Testnet</span>
-              </div>
-            </div>
+      <div className="relative bg-[#0c0308] text-white min-h-screen font-sans flex flex-col justify-between selection:bg-pink-500/30 selection:text-white overflow-hidden" id="circle-storage-landing-root">
+        {/* Ambient Interactive Psychedelic WebGL Background Loop */}
+        <PsychedelicWaterBackground />
 
-            {/* Anchor Links for Easy Scroll Navigation */}
-            <nav className="hidden md:flex items-center gap-6" id="landing-anchor-links">
-              <a href="#hero-section" className="text-xs font-bold font-sans text-white/70 hover:text-pink-400 transition-colors">
+        {/* High-contrast vignettes locked to the viewport to frame text beautifully and preserve contrast */}
+        <div className="fixed inset-0 bg-gradient-to-b from-black/50 via-transparent to-black/75 z-5 pointer-events-none" />
+        <div className="fixed inset-0 bg-radial-gradient from-transparent to-black/40 z-5 pointer-events-none" />
+
+        {/* Landing Navigation Header - Pure Transparent Centered Styling */}
+        <header className="relative z-50 bg-transparent py-6" id="landing-navigation-bar">
+          <div className="max-w-7xl mx-auto px-6 flex items-center justify-center">
+            {/* Anchor Links wrapped in dark, transparent glassmorphism capsules with larger text */}
+            <nav className="flex items-center gap-3 flex-wrap justify-center animate-fade-in" id="landing-anchor-links">
+              <a 
+                href="#hero-section" 
+                className="px-5 py-2 text-sm font-bold font-sans text-white/90 bg-black/60 hover:bg-black/85 border border-white/10 hover:border-pink-500/40 rounded-full backdrop-blur-md transition-all duration-300 shadow-sm flex items-center justify-center tracking-wide hover:scale-105 active:scale-95"
+              >
                 About
               </a>
-              <a href="#use-cases-section" className="text-xs font-bold font-sans text-white/70 hover:text-pink-400 transition-colors">
-                Use Cases
+              <a 
+                href="#use-cases-section" 
+                className="px-5 py-2 text-sm font-bold font-sans text-white/90 bg-black/60 hover:bg-black/85 border border-white/10 hover:border-pink-500/40 rounded-full backdrop-blur-md transition-all duration-300 shadow-sm flex items-center justify-center tracking-wide hover:scale-105 active:scale-95"
+              >
+                Use Case
               </a>
-              <a href="#how-it-works-section" className="text-xs font-bold font-sans text-white/70 hover:text-pink-400 transition-colors">
+              <a 
+                href="#how-it-works-section" 
+                className="px-5 py-2 text-sm font-bold font-sans text-white/90 bg-black/60 hover:bg-black/85 border border-white/10 hover:border-pink-500/40 rounded-full backdrop-blur-md transition-all duration-300 shadow-sm flex items-center justify-center tracking-wide hover:scale-105 active:scale-95"
+              >
                 Protocol Flow
               </a>
-              <a href="#faq-section" className="text-xs font-bold font-sans text-white/70 hover:text-pink-400 transition-colors">
+              <a 
+                href="#faq-section" 
+                className="px-5 py-2 text-sm font-bold font-sans text-white/90 bg-black/60 hover:bg-black/85 border border-white/10 hover:border-pink-500/40 rounded-full backdrop-blur-md transition-all duration-300 shadow-sm flex items-center justify-center tracking-wide hover:scale-105 active:scale-95"
+              >
                 FAQ
               </a>
             </nav>
-
-            {/* Launch App CTAs */}
-            <div>
-              <button
-                id="btn-landing-header-launch"
-                onClick={() => setActiveTab("marketplace")}
-                className="px-5 py-2.5 bg-gradient-to-r from-pink-500 to-amber-500 hover:from-pink-400 hover:to-amber-400 text-white font-sans font-bold text-xs rounded-xl cursor-pointer flex items-center gap-1.5 transition-all shadow-md active:scale-95 border border-white/10"
-              >
-                Launch App
-              </button>
-            </div>
           </div>
         </header>
 
         {/* Full-bleed landing page content container */}
-        <main className="flex-1" id="landing-content-canvas">
+        <main className="flex-1 relative z-10" id="landing-content-canvas">
           <LandingPage onEnterApp={() => setActiveTab("marketplace")} />
         </main>
+
+        {/* Go To Top floating capsule */}
+        {showGoToTop && (
+          <button
+            onClick={scrollToTop}
+            className="fixed bottom-6 right-6 z-50 p-3.5 rounded-full bg-black/70 border border-white/10 hover:border-pink-500/40 hover:bg-black/90 text-white backdrop-blur-md shadow-2xl transition-all duration-300 hover:scale-105 active:scale-95 cursor-pointer flex items-center justify-center"
+            title="Go to Top"
+            id="btn-go-to-top"
+          >
+            <ArrowUp className="w-5 h-5 text-pink-400" />
+          </button>
+        )}
       </div>
     );
   }
@@ -94,20 +117,10 @@ function AppContent() {
       <header className="sticky top-0 z-50 bg-black/40 backdrop-blur-md border-b border-white/10" id="main-navigation-bar">
         <div className="max-w-7xl mx-auto px-6 h-18 flex items-center justify-between">
           
-          {/* Logo Brand */}
-          <button
-            onClick={() => setActiveTab("landing")}
-            className="flex items-center gap-2.5 text-left cursor-pointer group focus:outline-none"
-            id="brand-logo-trigger"
-          >
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-pink-500 via-rose-400 to-amber-500 flex items-center justify-center shadow-md shadow-pink-500/15 group-hover:scale-105 transition-transform">
-              <HardDrive className="w-5 h-5 text-white" />
-            </div>
-            <div>
-              <span className="text-sm font-sans font-bold tracking-tight text-white block leading-none">Circle Storage</span>
-              <span className="text-[9px] font-mono text-amber-400 font-bold uppercase tracking-wider block mt-1">Shelby Testnet</span>
-            </div>
-          </button>
+          {/* Left indicator without physical graphic logo */}
+          <div className="text-xs font-mono font-bold tracking-wider text-amber-400 uppercase select-none" id="brand-logo-trigger">
+            Shelby Testnet
+          </div>
 
           {/* Desktop Links */}
           <nav className="hidden md:flex items-center gap-1.5" id="nav-links-desktop">
@@ -343,6 +356,18 @@ function AppContent() {
           <p className="text-[10px] text-white/40">Aptos Shelby Testnet • Pink & Gold Premium Console</p>
         </div>
       </footer>
+
+      {/* Go To Top floating capsule for the app workspace */}
+      {showGoToTop && (
+        <button
+          onClick={scrollToTop}
+          className="fixed bottom-6 right-6 z-50 p-3.5 rounded-full bg-black/70 border border-white/10 hover:border-pink-500/40 hover:bg-black/90 text-white backdrop-blur-md shadow-2xl transition-all duration-300 hover:scale-105 active:scale-95 cursor-pointer flex items-center justify-center"
+          title="Go to Top"
+          id="btn-app-go-to-top"
+        >
+          <ArrowUp className="w-5 h-5 text-pink-400" />
+        </button>
+      )}
     </div>
   );
 }
