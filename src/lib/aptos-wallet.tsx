@@ -139,92 +139,92 @@ const checkWalletDetected = (name: string): boolean => {
   return !!getWalletProvider(name) || !!getLegacyProvider(name);
 };
 
+// Helper function to cleanly resolve a primitive string representing a valid Aptos address (including standard AccountAddress object custom string representations)
+const getAddressString = (value: any): string | null => {
+  if (!value) return null;
+
+  // 1. If primitive string, validate and return
+  if (typeof value === "string") {
+    const clean = value.trim();
+    if (/^0x[0-9a-fA-F]{3,66}$/.test(clean)) return clean;
+    if (/^[0-9a-fA-F]{40,64}$/.test(clean)) return "0x" + clean;
+    return null;
+  }
+
+  // 2. If standard AccountAddress/PubKey class representation instance (modern Aptos TS SDK and AIP-62 standard objects)
+  if (typeof value === "object") {
+    try {
+      if (typeof value.toString === "function") {
+        const str = value.toString().trim();
+        if (str && str !== "[object Object]") {
+          if (/^0x[0-9a-fA-F]{3,66}$/.test(str)) return str;
+          if (/^[0-9a-fA-F]{40,64}$/.test(str)) return "0x" + str;
+        }
+      }
+    } catch {}
+
+    const directKeys = ["address", "hexString", "value"];
+    for (const key of directKeys) {
+      try {
+        const subValue = value[key];
+        if (subValue) {
+          if (typeof subValue === "string") {
+            const clean = subValue.trim();
+            if (/^0x[0-9a-fA-F]{3,66}$/.test(clean)) return clean;
+            if (/^[0-9a-fA-F]{40,64}$/.test(clean)) return "0x" + clean;
+          } else if (typeof subValue === "object") {
+            const nested = getAddressString(subValue);
+            if (nested) return nested;
+          }
+        }
+      } catch {}
+    }
+  }
+
+  return null;
+};
+
 // Helper to cleanly extract standard-compliant Aptos cryptographic address payloads from response structures
 const extractAddress = (payload: any): string | null => {
   if (!payload) return null;
 
   try {
-    // 1. If payload is already a direct string
-    if (typeof payload === "string") {
-      const clean = payload.trim();
-      if (/^0x[0-9a-fA-F]{3,66}$/.test(clean)) {
-        console.log(`[Circle Storage] [extractAddress] Successfully extracted standard 0x address directly from string: "${clean}"`);
-        return clean;
-      }
-      if (/^[0-9a-fA-F]{40,64}$/.test(clean)) {
-        const withPrefix = "0x" + clean;
-        console.log(`[Circle Storage] [extractAddress] Successfully extracted hex address directly from string and added prefix: "${withPrefix}"`);
-        return withPrefix;
-      }
+    const directResult = getAddressString(payload);
+    if (directResult) {
+      console.log(`[Circle Storage] [extractAddress] Extracted address representation from direct structure: "${directResult}"`);
+      return directResult;
     }
 
-    // 2. If payload has accounts array (standard AIP-62 format)
-    if (payload && payload.accounts && Array.isArray(payload.accounts) && payload.accounts.length > 0) {
-      const firstAcc = payload.accounts[0];
-      if (firstAcc && typeof firstAcc === "object" && firstAcc.address && typeof firstAcc.address === "string") {
-        const clean = firstAcc.address.trim();
-        if (/^0x[0-9a-fA-F]{3,66}$/.test(clean)) {
-          console.log(`[Circle Storage] [extractAddress] Extracted AIP-62 standard address from accounts[0]: "${clean}"`);
-          return clean;
-        }
-        if (/^[0-9a-fA-F]{40,64}$/.test(clean)) {
-          console.log(`[Circle Storage] [extractAddress] Extracted AIP-62 raw hex from accounts[0]. Auto-prepaid 0x: "0x${clean}"`);
-          return "0x" + clean;
-        }
-      }
-    }
-
-    // 3. If payload is an array of strings or simple account objects
     if (Array.isArray(payload) && payload.length > 0) {
-      const first = payload[0];
-      if (typeof first === "string") {
-        const clean = first.trim();
-        if (/^0x[0-9a-fA-F]{3,66}$/.test(clean)) {
-          console.log(`[Circle Storage] [extractAddress] Extracted address from index 0 of array payload: "${clean}"`);
-          return clean;
-        }
-        if (/^[0-9a-fA-F]{40,64}$/.test(clean)) {
-          return "0x" + clean;
-        }
-      } else if (first && typeof first === "object" && first.address && typeof first.address === "string") {
-        const clean = first.address.trim();
-        if (/^0x[0-9a-fA-F]{3,66}$/.test(clean)) {
-          console.log(`[Circle Storage] [extractAddress] Extracted address object from index 0 of array payload: "${clean}"`);
-          return clean;
-        }
-        if (/^[0-9a-fA-F]{40,64}$/.test(clean)) {
-          return "0x" + clean;
+      for (let i = 0; i < payload.length; i++) {
+        const res = getAddressString(payload[i]);
+        if (res) {
+          console.log(`[Circle Storage] [extractAddress] Extracted address from index [${i}]: "${res}"`);
+          return res;
         }
       }
     }
 
-    // 4. If payload is an object with standard keys
-    if (payload && typeof payload === "object") {
+    if (typeof payload === "object") {
+      if (payload.accounts && Array.isArray(payload.accounts) && payload.accounts.length > 0) {
+        for (let i = 0; i < payload.accounts.length; i++) {
+          const res = getAddressString(payload.accounts[i]);
+          if (res) {
+            console.log(`[Circle Storage] [extractAddress] Extracted address from payload.accounts[${i}]: "${res}"`);
+            return res;
+          }
+        }
+      }
+
       const priorityKeys = ["address", "accountAddress", "walletAddress", "selectedAddress", "account", "activeAccount"];
       for (const key of priorityKeys) {
         try {
-          const value = payload[key];
-          if (value && typeof value === "string") {
-            const clean = value.trim();
-            if (/^0x[0-9a-fA-F]{3,66}$/.test(clean)) {
-              console.log(`[Circle Storage] [extractAddress] Extracted standard address using priority property key "${key}": "${clean}"`);
-              return clean;
-            }
-            if (/^[0-9a-fA-F]{40,64}$/.test(clean)) {
-              console.log(`[Circle Storage] [extractAddress] Extracted raw hex using priority property key "${key}". Fixed prefix: "0x${clean}"`);
-              return "0x" + clean;
-            }
-          } else if (value && typeof value === "object") {
-            // Check direct property under sub-object
-            if (value.address && typeof value.address === "string") {
-              const clean = value.address.trim();
-              if (/^0x[0-9a-fA-F]{3,66}$/.test(clean)) {
-                console.log(`[Circle Storage] [extractAddress] Extracted standard address from sub-property "${key}.address": "${clean}"`);
-                return clean;
-              }
-              if (/^[0-9a-fA-F]{40,64}$/.test(clean)) {
-                return "0x" + clean;
-              }
+          const val = payload[key];
+          if (val) {
+            const res = getAddressString(val);
+            if (res) {
+              console.log(`[Circle Storage] [extractAddress] Extracted address using key "${key}": "${res}"`);
+              return res;
             }
           }
         } catch {}
@@ -240,11 +240,9 @@ const extractAddress = (payload: any): string | null => {
 // Recursive Deep Scanner to locate valid Aptos addresses inside arbitrary wallet payload structures
 const findAptosAddress = (obj: any, visited = new Set<any>()): string | null => {
   if (!obj) {
-    console.log("[Circle Storage] [findAptosAddress] Received empty, null, or undefined entry.");
     return null;
   }
   if (visited.has(obj)) {
-    console.log("[Circle Storage] [findAptosAddress] Detected circular dependency. Skipping visited node.");
     return null;
   }
 
@@ -255,34 +253,25 @@ const findAptosAddress = (obj: any, visited = new Set<any>()): string | null => 
 
   if (typeof obj === "string") {
     const clean = obj.trim();
-    console.log(`[Circle Storage] [findAptosAddress] Testing raw string value: "${clean}"`);
-    // Match standard Aptos addresses (0x followed by hex block 3 to 66 hex characters)
     if (/^0x[0-9a-fA-F]{3,66}$/.test(clean)) {
-      console.log(`[Circle Storage] [findAptosAddress] String "${clean}" strongly matches standard 0x hex address pattern.`);
       return clean;
     }
     if (/^[0-9a-fA-F]{40,64}$/.test(clean)) {
-      const fixedClean = "0x" + clean;
-      console.log(`[Circle Storage] [findAptosAddress] String "${clean}" matches raw hex. Auto-prepaid 0x: "${fixedClean}"`);
-      return fixedClean;
+      return "0x" + clean;
     }
-    console.log(`[Circle Storage] [findAptosAddress] String format mismatch for candidate string: "${clean}"`);
   }
 
   if (Array.isArray(obj)) {
     visited.add(obj);
-    console.log(`[Circle Storage] [findAptosAddress] Recursively parsing array of length: ${obj.length}`);
     for (let i = 0; i < obj.length; i++) {
-        try {
-          console.log(`[Circle Storage] [findAptosAddress] Index [${i}] check...`);
-          const addr = findAptosAddress(obj[i], visited);
-          if (addr) {
-            console.log(`[Circle Storage] [findAptosAddress] Address resolved from array index [${i}]: ${addr}`);
-            return addr;
-          }
-        } catch (e) {
-          console.warn(`[Circle Storage] Error accessing array index [${i}] during recursion:`, e);
+      try {
+        const addr = findAptosAddress(obj[i], visited);
+        if (addr) {
+          return addr;
         }
+      } catch (e) {
+        console.warn(`[Circle Storage] Error accessing array index [${i}] during recursion:`, e);
+      }
     }
     return null;
   }
@@ -293,33 +282,17 @@ const findAptosAddress = (obj: any, visited = new Set<any>()): string | null => 
     try {
       keys = Object.keys(obj);
     } catch (e) {
-      console.log("[Circle Storage] [findAptosAddress] Failed to retrieve object keys (possible security boundaries or prototype getter exceptions).");
+      console.log("[Circle Storage] [findAptosAddress] Failed to retrieve object keys.");
     }
-    console.log(`[Circle Storage] [findAptosAddress] Scanning object properties. Keys present:`, keys);
-    
-    // First query standard, high-priority naming fields for direct matches
+
     const priorityKeys = ["address", "accountAddress", "walletAddress", "selectedAddress", "account", "activeAccount"];
     for (const key of priorityKeys) {
       try {
         if (Object.prototype.hasOwnProperty.call(obj, key)) {
           const value = obj[key];
-          console.log(`[Circle Storage] [findAptosAddress] Prioritizing check on key "${key}" with type: ${typeof value}`);
-          if (typeof value === "string") {
-            const clean = value.trim();
-            if (/^0x[0-9a-fA-F]{3,66}$/.test(clean)) {
-              console.log(`[Circle Storage] [findAptosAddress] Found address matching standard format on key "${key}": ${clean}`);
-              return clean;
-            }
-            if (/^[0-9a-fA-F]{40,64}$/.test(clean)) {
-              const fixedClean = "0x" + clean;
-              console.log(`[Circle Storage] [findAptosAddress] Found address matching raw hex on key "${key}". Fixed: ${fixedClean}`);
-              return fixedClean;
-            }
-            console.log(`[Circle Storage] [findAptosAddress] Key "${key}" string value didn't match regex: "${clean}"`);
-          } else if (value && typeof value === "object") {
-            const addr = findAptosAddress(value, visited);
+          if (value) {
+            const addr = getAddressString(value) || findAptosAddress(value, visited);
             if (addr) {
-              console.log(`[Circle Storage] [findAptosAddress] Address successfully retrieved from sub-object of key "${key}": ${addr}`);
               return addr;
             }
           }
@@ -329,16 +302,16 @@ const findAptosAddress = (obj: any, visited = new Set<any>()): string | null => 
       }
     }
 
-    // Inspect other custom descriptors recursively (ignoring keys already checked)
-    for (const key in obj) {
+    for (const key of keys) {
       if (priorityKeys.includes(key)) continue;
       try {
-        if (Object.prototype.hasOwnProperty.call(obj, key)) {
-          const value = obj[key];
-          console.log(`[Circle Storage] [findAptosAddress] Traversing nested fallback property "${key}" with type: ${typeof value}`);
+        const value = obj[key];
+        if (value && typeof value === "object") {
+          if (key.startsWith("$$") || key.startsWith("__") || value.nodeType !== undefined || value === window || value === document) {
+            continue;
+          }
           const addr = findAptosAddress(value, visited);
           if (addr) {
-            console.log(`[Circle Storage] [findAptosAddress] Address resolved from fallback property pathway "${key}": ${addr}`);
             return addr;
           }
         }
