@@ -55,8 +55,11 @@ const getWalletProvider = (name: string): any => {
 
   // 2. Fallbacks for standard browser property spaces
   if (cleanName === "Petra Wallet" || cleanName === "Petra") {
-    // Avoid accessing window.petra at all under any circumstances since its property getter
-    // raises an instant deprecation exception in modern Petra Wallet versions on properties/calls.
+    try {
+      if ((window as any).petra) return (window as any).petra;
+    } catch (e) {
+      console.warn("[Circle Storage] Error checking window.petra fallback:", e);
+    }
     try {
       if ((window as any).aptos) return (window as any).aptos;
     } catch (e) {
@@ -98,9 +101,42 @@ const getWalletProvider = (name: string): any => {
   return null;
 };
 
+// Helper function to safely fetch legacy providers corresponding to standard names
+const getLegacyProvider = (name: string): any => {
+  if (typeof window === "undefined") return null;
+  const cleanName = name.replace(" (Sandbox)", "").trim();
+  const cName = cleanName.toLowerCase();
+
+  if (cName.includes("petra")) {
+    return (window as any).petra || (window as any).aptos;
+  }
+  if (cName.includes("martian")) {
+    return (window as any).martian;
+  }
+  if (cName.includes("pontem")) {
+    return (window as any).pontem;
+  }
+  if (cName.includes("rise")) {
+    return (window as any).rise || (window as any).riseWallet;
+  }
+  if (cName.includes("fewcha")) {
+    return (window as any).fewcha;
+  }
+  if (cName.includes("okx")) {
+    return (window as any).okx?.aptos || (window as any).okx;
+  }
+  if (cName.includes("trust")) {
+    return (window as any).trustWallet?.aptos || (window as any).trustWallet;
+  }
+  if (cName.includes("nightly")) {
+    return (window as any).nightly?.aptos || (window as any).nightly;
+  }
+  return (window as any).aptos;
+};
+
 // Check if a wallet extension is active/installed dynamically
 const checkWalletDetected = (name: string): boolean => {
-  return !!getWalletProvider(name);
+  return !!getWalletProvider(name) || !!getLegacyProvider(name);
 };
 
 export function AptosWalletProvider({ children }: { children: ReactNode }) {
@@ -237,9 +273,16 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
     try {
       console.log(`[Circle Storage] Connecting to wallet: ${name}`);
       const cleanName = name.replace(" (Sandbox)", "").trim();
+      
       const provider = getWalletProvider(cleanName);
+      const legacyProvider = getLegacyProvider(cleanName);
 
-      if (!provider) {
+      console.log(`[Circle Storage] Providers fetched:`, {
+        provider: provider ? typeof provider : "null",
+        legacyProvider: legacyProvider ? typeof legacyProvider : "null"
+      });
+
+      if (!provider && !legacyProvider) {
         // No wallet extension active or detected. Inform user strictly.
         alert(
           `Could not connect to ${cleanName} Extension.\n\n` +
@@ -252,103 +295,119 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
       let walletAddress: string | null = null;
 
       // 1. Try modern Aptos Wallet Standard (AIP-62) connect feature
-      const connectFeature = provider.features?.['standard:connect'] || provider.features?.['aptos:connect'];
-      if (connectFeature) {
-        try {
-          console.log(`[Circle Storage] Triggering standard AIP-62 connect request for ${cleanName}...`);
-          const result = await connectFeature.connect();
-          console.log(`[Circle Storage] AIP-62 connect result:`, result);
-          
-          // Build a list of candidate account arrays to inspect in sequence
-          const candidateArrays = [
-            result?.accounts,
-            provider?.accounts,
-            result?.[0]?.accounts,
-            Array.isArray(result) ? result : null
-          ];
-
-          for (const arr of candidateArrays) {
-            if (Array.isArray(arr) && arr.length > 0) {
-              const first = arr[0];
-              const candidateAddress = first?.address || first;
-              if (candidateAddress && typeof candidateAddress === "string") {
-                walletAddress = candidateAddress;
-                break;
-              }
-            }
-          }
-
-          // If not found, try direct address property lookups
-          if (!walletAddress) {
-            const directCandidates = [
-              result?.address,
-              result?.[0]?.address,
-              provider?.activeAccount?.address,
-              provider?.account?.address,
-            ];
-            for (const cand of directCandidates) {
-              if (cand && typeof cand === "string") {
-                walletAddress = cand;
-                break;
-              }
-            }
-          }
-        } catch (aip62Err) {
-          console.warn(`[Circle Storage] Standard AIP-62 connection failed or bypassed for ${cleanName}:`, aip62Err);
-        }
-      } 
-
-      // 2. Fall back to standard legacy provider.connect() or property inspection if address is still null
-      if (!walletAddress) {
-        if (typeof provider.connect === "function") {
-          console.log(`[Circle Storage] Triggering legacy provider.connect() request for ${cleanName}...`);
+      if (provider) {
+        const connectFeature = provider.features?.['standard:connect'] || provider.features?.['aptos:connect'];
+        if (connectFeature) {
           try {
-            const response = await provider.connect();
-            console.log(`[Circle Storage] Legacy connect result:`, response);
-            const candidates = [
-              response?.address,
-              response?.walletAddress,
-              response?.account?.address,
-              response?.[0]?.address,
-              Array.isArray(response) ? response[0] : null,
-              response
+            console.log(`[Circle Storage] Triggering standard AIP-62 connect request for ${cleanName}...`);
+            const result = await connectFeature.connect();
+            console.log(`[Circle Storage] AIP-62 connect result:`, result);
+            
+            // Build a list of candidate account arrays to inspect in sequence
+            const candidateArrays = [
+              result?.accounts,
+              provider?.accounts,
+              result?.[0]?.accounts,
+              Array.isArray(result) ? result : null
             ];
-            for (const cand of candidates) {
-              if (cand && typeof cand === "string") {
-                walletAddress = cand;
-                break;
+
+            for (const arr of candidateArrays) {
+              if (Array.isArray(arr) && arr.length > 0) {
+                const first = arr[0];
+                const candidateAddress = first?.address || first;
+                if (candidateAddress && typeof candidateAddress === "string") {
+                  walletAddress = candidateAddress;
+                  break;
+                }
               }
             }
-          } catch (connectErr) {
-            console.warn(`[Circle Storage] Legacy connect() call failed for ${cleanName}:`, connectErr);
+
+            // If not found, try direct address property lookups
+            if (!walletAddress) {
+              const directCandidates = [
+                result?.address,
+                result?.[0]?.address,
+                provider?.activeAccount?.address,
+                provider?.account?.address,
+              ];
+              for (const cand of directCandidates) {
+                if (cand && typeof cand === "string") {
+                  walletAddress = cand;
+                  break;
+                }
+              }
+            }
+          } catch (aip62Err) {
+            console.warn(`[Circle Storage] Standard AIP-62 connection failed or bypassed for ${cleanName}:`, aip62Err);
           }
         }
+      }
 
-        // Check if there are other classic property methods on the provider
-        if (!walletAddress) {
-          // Check provider.account()
-          if (typeof provider.account === "function") {
+      // 2. Fall back to legacy providers connect() or property extraction
+      if (!walletAddress) {
+        const activeProviders = [provider, legacyProvider].filter(Boolean);
+        for (const prov of activeProviders) {
+          if (walletAddress) break;
+
+          // Try direct connect method if available
+          if (typeof prov.connect === "function") {
+            console.log(`[Circle Storage] Triggering provider.connect() request...`);
             try {
-              const acc = await provider.account();
+              const response = await prov.connect();
+              console.log(`[Circle Storage] Provider connect response payload:`, response);
+              
+              const candidates = [
+                response?.address,
+                response?.walletAddress,
+                response?.account?.address,
+                response?.[0]?.address,
+                Array.isArray(response) ? response[0] : null,
+                response
+              ];
+              for (const cand of candidates) {
+                if (cand && typeof cand === "string") {
+                  walletAddress = cand;
+                  break;
+                }
+              }
+            } catch (connectErr) {
+              console.warn(`[Circle Storage] connect() call failed on provider:`, connectErr);
+            }
+          }
+
+          // Try direct account method if available
+          if (!walletAddress && typeof prov.account === "function") {
+            try {
+              const acc = await prov.account();
+              console.log(`[Circle Storage] Provider account() payload fallback:`, acc);
               if (acc && acc.address) {
                 walletAddress = acc.address;
               }
-            } catch {}
+            } catch (accErr) {
+              console.warn(`[Circle Storage] account() check failed:`, accErr);
+            }
           }
-          // Check provider properties directly
+
+          // Checking standard properties
           if (!walletAddress) {
-            walletAddress = provider.address || provider.selectedAddress || provider.accountAddress || provider.activeAccount?.address;
+            const rawAddress = prov.address || prov.selectedAddress || prov.accountAddress || prov.activeAccount?.address;
+            if (rawAddress && typeof rawAddress === "string") {
+              walletAddress = rawAddress;
+            }
           }
         }
       }
 
       // 3. Last resort fallback to standard global window contexts if we STILL have no address
       if (!walletAddress && typeof window !== "undefined") {
+        console.warn(`[Circle Storage] Attempting global namespace connection rescue...`);
         const fallbackCandidates = [
-          (window as any).aptos,
           (window as any).petra,
+          (window as any).aptos,
           (window as any).martian,
-          (window as any).pontem
+          (window as any).pontem,
+          (window as any).riseWallet,
+          (window as any).rise
         ];
 
         for (const rawProv of fallbackCandidates) {
@@ -379,6 +438,13 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
       }
 
       if (!walletAddress) {
+        // Detailed troubleshooting error output
+        console.error("[Circle Storage] Could not resolve wallet address. Provider State Analysis:", {
+          provider,
+          legacyProvider,
+          windowAptos: (window as any).aptos,
+          windowPetra: (window as any).petra
+        });
         throw new Error("Connected successfully but no Aptos cryptographic address was returned.");
       }
 
