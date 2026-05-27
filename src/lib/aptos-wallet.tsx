@@ -139,43 +139,83 @@ const checkWalletDetected = (name: string): boolean => {
   return !!getWalletProvider(name) || !!getLegacyProvider(name);
 };
 
+// Try to safely convert Uint8Array or standard number arrays to standard hex address string representation
+const tryConvertBytesToHexAddress = (val: any): string | null => {
+  if (!val) return null;
+  
+  // Uint8Array pattern
+  if (val instanceof Uint8Array || (val.constructor && val.constructor.name === "Uint8Array")) {
+    try {
+      const hex = Array.from(val).map((b: any) => b.toString(16).padStart(2, "0")).join("");
+      return "0x" + hex;
+    } catch {}
+  }
+  
+  // Array of 32 bytes
+  if (Array.isArray(val) && val.length === 32 && val.every((x: any) => typeof x === "number" && x >= 0 && x <= 255)) {
+    try {
+      const hex = val.map((b: any) => b.toString(16).padStart(2, "0")).join("");
+      return "0x" + hex;
+    } catch {}
+  }
+  
+  // Byte array objects that are not direct Arrays (e.g. Node Buffers or other array-like types)
+  if (typeof val === "object" && typeof val.length === "number" && val.length === 32) {
+    try {
+      const arr = Array.from(val);
+      if (arr.every((x: any) => typeof x === "number" && x >= 0 && x <= 255)) {
+        const hex = arr.map((b: any) => b.toString(16).padStart(2, "0")).join("");
+        return "0x" + hex;
+      }
+    } catch {}
+  }
+  
+  return null;
+};
+
 // Helper function to cleanly resolve a primitive string representing a valid Aptos address (including standard AccountAddress object custom string representations)
 const getAddressString = (value: any): string | null => {
   if (!value) return null;
 
+  // 0. Try direct bytes conversion (Uint8Array, byte array etc)
+  const bytesHex = tryConvertBytesToHexAddress(value);
+  if (bytesHex) return bytesHex;
+
   // 1. If primitive string, validate and return
   if (typeof value === "string") {
     const clean = value.trim();
-    if (/^0x[0-9a-fA-F]{3,66}$/.test(clean)) return clean;
-    if (/^[0-9a-fA-F]{40,64}$/.test(clean)) return "0x" + clean;
+    if (/^0x[0-9a-fA-F]{1,66}$/.test(clean)) return clean;
+    if (/^[0-9a-fA-F]{30,64}$/.test(clean)) return "0x" + clean;
     return null;
   }
 
   // 2. If standard AccountAddress/PubKey class representation instance (modern Aptos TS SDK and AIP-62 standard objects)
   if (typeof value === "object") {
+    // Try custom byte conversion on properties if any
+    for (const subKey of ["addressBytes", "bytes", "data"]) {
+      try {
+        const bHex = tryConvertBytesToHexAddress(value[subKey]);
+        if (bHex) return bHex;
+      } catch {}
+    }
+
     try {
       if (typeof value.toString === "function") {
         const str = value.toString().trim();
         if (str && str !== "[object Object]") {
-          if (/^0x[0-9a-fA-F]{3,66}$/.test(str)) return str;
-          if (/^[0-9a-fA-F]{40,64}$/.test(str)) return "0x" + str;
+          if (/^0x[0-9a-fA-F]{1,66}$/.test(str)) return str;
+          if (/^[0-9a-fA-F]{30,64}$/.test(str)) return "0x" + str;
         }
       }
     } catch {}
 
-    const directKeys = ["address", "hexString", "value"];
+    const directKeys = ["address", "hexString", "value", "accountAddress", "walletAddress"];
     for (const key of directKeys) {
       try {
         const subValue = value[key];
         if (subValue) {
-          if (typeof subValue === "string") {
-            const clean = subValue.trim();
-            if (/^0x[0-9a-fA-F]{3,66}$/.test(clean)) return clean;
-            if (/^[0-9a-fA-F]{40,64}$/.test(clean)) return "0x" + clean;
-          } else if (typeof subValue === "object") {
-            const nested = getAddressString(subValue);
-            if (nested) return nested;
-          }
+          const res = getAddressString(subValue);
+          if (res) return res;
         }
       } catch {}
     }
@@ -232,6 +272,64 @@ const extractAddress = (payload: any): string | null => {
     }
   } catch (err) {
     console.warn("[Circle Storage] Direct extractAddress failed with exception:", err);
+  }
+
+  return null;
+};
+
+// Asynchronously probe any wallet instance or connection payload for a usable Aptos account address
+const probeInstanceForAddress = async (instance: any): Promise<string | null> => {
+  if (!instance) return null;
+  console.log("[Circle Storage] [probeInstanceForAddress] Probing instance:", instance);
+
+  // Try direct properties first before calling async methods
+  const directSweep = extractAddress(instance) || findAptosAddress(instance);
+  if (directSweep) {
+    console.log("[Circle Storage] [probeInstanceForAddress] Found address in direct properties:", directSweep);
+    return directSweep;
+  }
+
+  // Try calling account()
+  if (typeof instance.account === "function") {
+    try {
+      const acc = await instance.account();
+      console.log("[Circle Storage] [probeInstanceForAddress] Called instance.account():", acc);
+      const res = extractAddress(acc) || findAptosAddress(acc);
+      if (res) return res;
+    } catch (e) {
+      console.warn("[Circle Storage] Error pattern calling instance.account():", e);
+    }
+  }
+
+  // Try calling accounts()
+  if (typeof instance.accounts === "function") {
+    try {
+      const accs = await instance.accounts();
+      console.log("[Circle Storage] [probeInstanceForAddress] Called instance.accounts():", accs);
+      const res = extractAddress(accs) || findAptosAddress(accs);
+      if (res) return res;
+    } catch (e) {
+      console.warn("[Circle Storage] Error pattern calling instance.accounts():", e);
+    }
+  }
+
+  // Try calling getAccount()
+  if (typeof instance.getAccount === "function") {
+    try {
+      const acc = await instance.getAccount();
+      console.log("[Circle Storage] [probeInstanceForAddress] Called instance.getAccount():", acc);
+      const res = extractAddress(acc) || findAptosAddress(acc);
+      if (res) return res;
+    } catch (e) {
+      console.warn("[Circle Storage] Error pattern calling instance.getAccount():", e);
+    }
+  }
+
+  // Try direct provider.accounts getter (if standard AIP-62)
+  if (instance.accounts && Array.isArray(instance.accounts) && instance.accounts.length > 0) {
+    console.log("[Circle Storage] [probeInstanceForAddress] Found standard instance.accounts array:", instance.accounts);
+    const res = extractAddress(instance.accounts) || findAptosAddress(instance.accounts);
+    if (res) return res;
   }
 
   return null;
@@ -497,12 +595,12 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
             console.log(`[Circle Storage] [AIP-62 Connect Complete] Response payload:`, result);
             
             // Search result payload carefully
-            walletAddress = extractAddress(result) || findAptosAddress(result);
+            walletAddress = await probeInstanceForAddress(result);
             console.log(`[Circle Storage] [Address Scan Step 1] Check on response container yields address: "${walletAddress}"`);
             
             if (!walletAddress) {
               console.log(`[Circle Storage] [Address Scan Step 2] Fetching directly from root standard provider state...`);
-              walletAddress = extractAddress(provider) || findAptosAddress(provider);
+              walletAddress = await probeInstanceForAddress(provider);
               console.log(`[Circle Storage] [Address Scan Step 2 Results] Direct sweep yields address: "${walletAddress}"`);
             }
           } catch (aip62Err) {
@@ -527,8 +625,8 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
               console.log(`[Circle Storage] [Legacy Connect Stage] Triggering prov.connect() invocation...`);
               const response = await prov.connect();
               console.log(`[Circle Storage] [Legacy Connect Complete] Returned response payload:`, response);
-              walletAddress = extractAddress(response) || findAptosAddress(response);
-              console.log(`[Circle Storage] [Address Scan Step 3] Check on response payload: "${walletAddress}"`);
+              walletAddress = await probeInstanceForAddress(response) || await probeInstanceForAddress(prov);
+              console.log(`[Circle Storage] [Address Scan Step 3] Check on response/provider payload: "${walletAddress}"`);
             } catch (connectErr) {
               console.warn(`[Circle Storage] [Legacy Connect Error] connect() call failed on provider:`, connectErr);
             }
@@ -540,7 +638,7 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
               console.log(`[Circle Storage] [Legacy Account Stage] Triggering legacy prov.account() invocation...`);
               const acc = await prov.account();
               console.log(`[Circle Storage] [Legacy Account Complete] Returned response payload:`, acc);
-              walletAddress = extractAddress(acc) || findAptosAddress(acc);
+              walletAddress = await probeInstanceForAddress(acc);
               console.log(`[Circle Storage] [Address Scan Step 4] Check on legacy account response: "${walletAddress}"`);
             } catch (accErr) {
               console.warn(`[Circle Storage] [Legacy Account Error] account() check failed:`, accErr);
@@ -550,7 +648,7 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
           // C. Checking standard properties directly on provider metadata
           if (!walletAddress) {
             console.log(`[Circle Storage] [Direct Extraction Stage] Sweeping direct properties on provider instance...`);
-            walletAddress = extractAddress(prov) || findAptosAddress(prov);
+            walletAddress = await probeInstanceForAddress(prov);
             console.log(`[Circle Storage] [Address Scan Step 5] Check on direct properties: "${walletAddress}"`);
           }
         }
@@ -575,17 +673,12 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
               if (typeof cand.instance.isConnected === "function" && !(await cand.instance.isConnected())) {
                 console.log(`[Circle Storage] [Rescue Connected State] Context reports offline. Invoking cand.connect()...`);
                 const connRes = await cand.instance.connect();
-                walletAddress = extractAddress(connRes) || findAptosAddress(connRes);
+                walletAddress = await probeInstanceForAddress(connRes) || await probeInstanceForAddress(cand.instance);
                 console.log(`[Circle Storage] [Address Scan Step 6] Check on rescue connect: "${walletAddress}"`);
               }
-              if (!walletAddress && typeof cand.instance.account === "function") {
-                const acc = await cand.instance.account();
-                walletAddress = extractAddress(acc) || findAptosAddress(acc);
-                console.log(`[Circle Storage] [Address Scan Step 7] Check on rescue account: "${walletAddress}"`);
-              }
               if (!walletAddress) {
-                walletAddress = extractAddress(cand.instance) || findAptosAddress(cand.instance);
-                console.log(`[Circle Storage] [Address Scan Step 8] Check on rescue sweeping: "${walletAddress}"`);
+                walletAddress = await probeInstanceForAddress(cand.instance);
+                console.log(`[Circle Storage] [Address Scan Step 7] Check on rescue sweeping: "${walletAddress}"`);
               }
               if (walletAddress) {
                 console.log(`[Circle Storage] [Rescue Success] Resolved address from candidate "${cand.label}": "${walletAddress}"`);
