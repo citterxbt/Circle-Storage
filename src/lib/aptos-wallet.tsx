@@ -258,17 +258,59 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
         const result = await connectFeature.connect();
         console.log(`[Circle Storage] AIP-62 connect result:`, result);
         
-        const accounts = result?.accounts || result?.[0]?.accounts;
-        if (accounts && accounts.length > 0) {
-          walletAddress = accounts[0].address;
-        } else if (result && result.address) {
-          walletAddress = result.address;
-        } else if (Array.isArray(result) && result[0]?.address) {
-          walletAddress = result[0].address;
-        } else if (result?.accounts?.[0]) {
-          walletAddress = result.accounts[0].address;
-        } else {
-          walletAddress = result;
+        // Build a list of candidate account arrays to inspect in sequence
+        const candidateArrays = [
+          result?.accounts,
+          provider?.accounts,
+          result?.[0]?.accounts,
+          Array.isArray(result) ? result : null
+        ];
+
+        for (const arr of candidateArrays) {
+          if (Array.isArray(arr) && arr.length > 0) {
+            const first = arr[0];
+            const candidateAddress = first?.address || first;
+            if (candidateAddress && typeof candidateAddress === "string" && candidateAddress.startsWith("0x")) {
+              walletAddress = candidateAddress;
+              break;
+            }
+          }
+        }
+
+        // If not found, try direct address property lookups
+        if (!walletAddress) {
+          const directCandidates = [
+            result?.address,
+            result?.[0]?.address,
+            provider?.activeAccount?.address,
+            provider?.account?.address,
+            result
+          ];
+          for (const cand of directCandidates) {
+            if (cand && typeof cand === "string" && cand.startsWith("0x")) {
+              walletAddress = cand;
+              break;
+            }
+          }
+        }
+
+        // If still not found, try fallback window.aptos as a last resort
+        if (!walletAddress && typeof window !== "undefined") {
+          try {
+            const rawAptos = (window as any).aptos;
+            if (rawAptos) {
+              if (typeof rawAptos.account === "function") {
+                const acc = await rawAptos.account();
+                if (acc && acc.address) {
+                  walletAddress = acc.address;
+                }
+              } else if (rawAptos.address) {
+                walletAddress = rawAptos.address;
+              }
+            }
+          } catch (fallbackErr) {
+            console.warn("[Circle Storage] Last resort window.aptos check failed:", fallbackErr);
+          }
         }
       } 
       // 2. Fall back to clean window call if AIP-62 connect feature is not present and NOT Petra Wallet to prevent deprecation alerts
