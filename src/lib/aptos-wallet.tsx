@@ -146,8 +146,8 @@ const findAptosAddress = (obj: any, visited = new Set<any>()): string | null => 
 
   if (typeof obj === "string") {
     const clean = obj.trim();
-    // Match standard Aptos addresses (0x followed by hex block 30 to 66 hex characters)
-    if (/^0x[0-9a-fA-F]{30,66}$/.test(clean)) {
+    // Match standard Aptos addresses (0x followed by hex block 3 to 66 hex characters)
+    if (/^0x[0-9a-fA-F]{3,66}$/.test(clean)) {
       return clean;
     }
     if (/^[0-9a-fA-F]{40,64}$/.test(clean)) {
@@ -247,6 +247,9 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
         }
       }
 
+      // Append Developer Sandbox Wallet option explicitly at the end so it is an explicit choice for test simulations
+      detectedList.push("Developer Sandbox Wallet");
+
       setAvailableWallets(detectedList);
     };
 
@@ -330,120 +333,131 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
       console.log(`[Circle Storage] Connecting to wallet: ${name}`);
       const cleanName = name.replace(" (Sandbox)", "").trim();
       
-      const provider = getWalletProvider(cleanName);
-      const legacyProvider = getLegacyProvider(cleanName);
-
-      console.log(`[Circle Storage] Providers fetched:`, {
-        provider: provider ? typeof provider : "null",
-        legacyProvider: legacyProvider ? typeof legacyProvider : "null"
-      });
-
       let walletAddress: string | null = null;
 
-      // 1. Try modern Aptos Wallet Standard (AIP-62) connect feature
-      if (provider) {
-        const connectFeature = provider.features?.['standard:connect'] || provider.features?.['aptos:connect'];
-        if (connectFeature) {
-          try {
-            console.log(`[Circle Storage] Triggering standard AIP-62 connect request for ${cleanName}...`);
-            const result = await connectFeature.connect();
-            console.log(`[Circle Storage] AIP-62 connect result:`, result);
-            
-            // Search result payload recursively
-            walletAddress = findAptosAddress(result);
-            if (!walletAddress) {
-              walletAddress = findAptosAddress(provider);
-            }
-          } catch (aip62Err) {
-            console.warn(`[Circle Storage] Standard AIP-62 connection failed or bypassed for ${cleanName}:`, aip62Err);
+      if (cleanName === "Developer Sandbox Wallet") {
+        walletAddress = "0xe990f736f23840ca81720eb6e567c82c6de3b3c3c3c3c3c3c3c3c3c39e7badabcdef";
+      } else {
+        const provider = getWalletProvider(cleanName);
+        const legacyProvider = getLegacyProvider(cleanName);
+
+        console.log(`[Circle Storage] Providers fetched:`, {
+          provider: provider ? typeof provider : "null",
+          legacyProvider: legacyProvider ? typeof legacyProvider : "null"
+        });
+
+        if (!provider && !legacyProvider) {
+          const isNestedFrame = typeof window !== "undefined" && window.self !== window.top;
+          if (isNestedFrame) {
+            throw new Error(
+              `Web3 injection restricted inside nested previews.\n\n` +
+              `Under standard browser security policies, browser extensions like Petra Wallet cannot inject their Web3 context ("window.aptos") inside nested editor preview iframes.\n\n` +
+              `To connect your real wallet, please click the "Open in New Tab" button at the top-right of your screen, or choose "Developer Sandbox Wallet" in this preview to simulate storage actions.`
+            );
+          } else {
+            throw new Error(
+              `The "${cleanName}" extension was not detected on this browser.\n\n` +
+              `Please ensure the Petra Wallet extension is active on your browser, then refresh the page to connect.`
+            );
           }
         }
-      }
 
-      // 2. Fall back to legacy providers connect() or property extraction
-      if (!walletAddress) {
-        const activeProviders = [provider, legacyProvider].filter(Boolean);
-        for (const prov of activeProviders) {
-          if (walletAddress) break;
-
-          // Try direct connect method if available
-          if (typeof prov.connect === "function") {
-            console.log(`[Circle Storage] Triggering provider.connect() request...`);
+        // 1. Try modern Aptos Wallet Standard (AIP-62) connect feature
+        if (provider) {
+          const connectFeature = provider.features?.['standard:connect'] || provider.features?.['aptos:connect'];
+          if (connectFeature) {
             try {
-              const response = await prov.connect();
-              console.log(`[Circle Storage] Provider connect response payload:`, response);
-              walletAddress = findAptosAddress(response);
-            } catch (connectErr) {
-              console.warn(`[Circle Storage] connect() call failed on provider:`, connectErr);
-            }
-          }
-
-          // Try direct account method if available
-          if (!walletAddress && typeof prov.account === "function") {
-            try {
-              const acc = await prov.account();
-              console.log(`[Circle Storage] Provider account() payload fallback:`, acc);
-              walletAddress = findAptosAddress(acc);
-            } catch (accErr) {
-              console.warn(`[Circle Storage] account() check failed:`, accErr);
-            }
-          }
-
-          // Checking standard properties
-          if (!walletAddress) {
-            walletAddress = findAptosAddress(prov);
-          }
-        }
-      }
-
-      // 3. Last resort fallback to standard global window contexts if we STILL have no address
-      if (!walletAddress && typeof window !== "undefined") {
-        console.warn(`[Circle Storage] Attempting global namespace connection rescue...`);
-        const fallbackCandidates = [
-          (window as any).petra,
-          (window as any).aptos,
-          (window as any).martian,
-          (window as any).pontem,
-          (window as any).riseWallet,
-          (window as any).rise
-        ];
-
-        for (const rawProv of fallbackCandidates) {
-          if (rawProv) {
-            try {
-              if (typeof rawProv.isConnected === "function" && !(await rawProv.isConnected())) {
-                const connRes = await rawProv.connect();
-                walletAddress = findAptosAddress(connRes);
-              }
-              if (!walletAddress && typeof rawProv.account === "function") {
-                const acc = await rawProv.account();
-                walletAddress = findAptosAddress(acc);
-              }
+              console.log(`[Circle Storage] Triggering standard AIP-62 connect request for ${cleanName}...`);
+              const result = await connectFeature.connect();
+              console.log(`[Circle Storage] AIP-62 connect result:`, result);
+              
+              // Search result payload recursively
+              walletAddress = findAptosAddress(result);
               if (!walletAddress) {
-                walletAddress = findAptosAddress(rawProv);
+                walletAddress = findAptosAddress(provider);
               }
-              if (walletAddress) break;
-            } catch (fallbackErr) {
-              console.warn("[Circle Storage] Fallback helper lookup failed:", fallbackErr);
+            } catch (aip62Err) {
+              console.warn(`[Circle Storage] Standard AIP-62 connection failed or bypassed for ${cleanName}:`, aip62Err);
             }
           }
         }
-      }
 
-      // 4. Secure Sandbox Fallback Mode for Editor Iframe environments
-      if (!walletAddress) {
-        // Chrome browser extensions (e.g. Petra) restrict content script injection or communication
-        // inside nested developer preview iframes (such as the AI Studio IDE view) to protect users from Clickjacking.
-        // We gracefully activate a high-fidelity local Developer Sandbox address so they can test file storage locks
-        // and transfers seamlessly inside this view!
-        console.log(
-          `[Circle Storage] Active extension connection resolved without an address inside the sandboxed iframe environment.\n` +
-          `Activating Sandbox Developer Wallet for "${cleanName}" to enable seamless testing in development.`
-        );
-        
-        // Generate a valid deterministic, high-contrast address mapped to the wallet name
-        const walletHexKey = cleanName.toLowerCase().includes("petra") ? "9e7ba" : "fb6f2";
-        walletAddress = `0xe990f736f23840ca81720eb6e567c82c6de3b3c3c3c3c3c3c3c3c3c3${walletHexKey}dabcdef`;
+        // 2. Fall back to legacy providers connect() or property extraction
+        if (!walletAddress) {
+          const activeProviders = [provider, legacyProvider].filter(Boolean);
+          for (const prov of activeProviders) {
+            if (walletAddress) break;
+
+            // Try direct connect method if available
+            if (typeof prov.connect === "function") {
+              console.log(`[Circle Storage] Triggering provider.connect() request...`);
+              try {
+                const response = await prov.connect();
+                console.log(`[Circle Storage] Provider connect response payload:`, response);
+                walletAddress = findAptosAddress(response);
+              } catch (connectErr) {
+                console.warn(`[Circle Storage] connect() call failed on provider:`, connectErr);
+              }
+            }
+
+            // Try direct account method if available
+            if (!walletAddress && typeof prov.account === "function") {
+              try {
+                const acc = await prov.account();
+                console.log(`[Circle Storage] Provider account() payload fallback:`, acc);
+                walletAddress = findAptosAddress(acc);
+              } catch (accErr) {
+                console.warn(`[Circle Storage] account() check failed:`, accErr);
+              }
+            }
+
+            // Checking standard properties
+            if (!walletAddress) {
+              walletAddress = findAptosAddress(prov);
+            }
+          }
+        }
+
+        // 3. Last resort fallback to standard global window contexts if we STILL have no address
+        if (!walletAddress && typeof window !== "undefined") {
+          console.warn(`[Circle Storage] Attempting global namespace connection rescue...`);
+          const fallbackCandidates = [
+            (window as any).petra,
+            (window as any).aptos,
+            (window as any).martian,
+            (window as any).pontem,
+            (window as any).riseWallet,
+            (window as any).rise
+          ];
+
+          for (const rawProv of fallbackCandidates) {
+            if (rawProv) {
+              try {
+                if (typeof rawProv.isConnected === "function" && !(await rawProv.isConnected())) {
+                  const connRes = await rawProv.connect();
+                  walletAddress = findAptosAddress(connRes);
+                }
+                if (!walletAddress && typeof rawProv.account === "function") {
+                  const acc = await rawProv.account();
+                  walletAddress = findAptosAddress(acc);
+                }
+                if (!walletAddress) {
+                  walletAddress = findAptosAddress(rawProv);
+                }
+                if (walletAddress) break;
+              } catch (fallbackErr) {
+                console.warn("[Circle Storage] Fallback helper lookup failed:", fallbackErr);
+              }
+            }
+          }
+        }
+
+        if (!walletAddress) {
+          throw new Error(
+            `A connection was made to the extension but we could not resolve your account's cryptographic address.\n\n` +
+            `Please make sure your Petra wallet is unlocked and has at least one account created.`
+          );
+        }
       }
 
       // Format clean address values - make sure it starts with 0x and is properly trimmed
