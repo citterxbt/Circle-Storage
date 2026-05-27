@@ -141,53 +141,89 @@ const checkWalletDetected = (name: string): boolean => {
 
 // Recursive Deep Scanner to locate valid Aptos addresses inside arbitrary wallet payload structures
 const findAptosAddress = (obj: any, visited = new Set<any>()): string | null => {
-  if (!obj) return null;
-  if (visited.has(obj)) return null;
+  if (!obj) {
+    console.log("[Circle Storage] [findAptosAddress] Received empty, null, or undefined entry.");
+    return null;
+  }
+  if (visited.has(obj)) {
+    console.log("[Circle Storage] [findAptosAddress] Detected circular dependency. Skipping visited node.");
+    return null;
+  }
 
   if (typeof obj === "string") {
     const clean = obj.trim();
+    console.log(`[Circle Storage] [findAptosAddress] Testing raw string value: "${clean}"`);
     // Match standard Aptos addresses (0x followed by hex block 3 to 66 hex characters)
     if (/^0x[0-9a-fA-F]{3,66}$/.test(clean)) {
+      console.log(`[Circle Storage] [findAptosAddress] String "${clean}" strongly matches standard 0x hex address pattern.`);
       return clean;
     }
     if (/^[0-9a-fA-F]{40,64}$/.test(clean)) {
-      return "0x" + clean;
+      const fixedClean = "0x" + clean;
+      console.log(`[Circle Storage] [findAptosAddress] String "${clean}" matches raw hex. Auto-prepaid 0x: "${fixedClean}"`);
+      return fixedClean;
     }
+    console.log(`[Circle Storage] [findAptosAddress] String format mismatch for candidate string: "${clean}"`);
   }
 
   if (Array.isArray(obj)) {
     visited.add(obj);
-    for (const item of obj) {
-      const addr = findAptosAddress(item, visited);
-      if (addr) return addr;
+    console.log(`[Circle Storage] [findAptosAddress] Recursively parsing array of length: ${obj.length}`);
+    for (let i = 0; i < obj.length; i++) {
+      console.log(`[Circle Storage] [findAptosAddress] Index [${i}] check...`);
+      const addr = findAptosAddress(obj[i], visited);
+      if (addr) {
+        console.log(`[Circle Storage] [findAptosAddress] Address resolved from array index [${i}]: ${addr}`);
+        return addr;
+      }
     }
     return null;
   }
 
   if (typeof obj === "object") {
     visited.add(obj);
+    const keys = Object.keys(obj);
+    console.log(`[Circle Storage] [findAptosAddress] Scanning object properties. Keys present:`, keys);
     
     // First query standard, high-priority naming fields for direct matches
     const priorityKeys = ["address", "accountAddress", "walletAddress", "selectedAddress", "account", "activeAccount"];
     for (const key of priorityKeys) {
       if (Object.prototype.hasOwnProperty.call(obj, key)) {
         const value = obj[key];
+        console.log(`[Circle Storage] [findAptosAddress] Prioritizing check on key "${key}" with type: ${typeof value}`);
         if (typeof value === "string") {
           const clean = value.trim();
-          if (/^0x[0-9a-fA-F]{30,66}$/.test(clean)) return clean;
-          if (/^[0-9a-fA-F]{40,64}$/.test(clean)) return "0x" + clean;
+          if (/^0x[0-9a-fA-F]{3,66}$/.test(clean)) {
+            console.log(`[Circle Storage] [findAptosAddress] Found address matching standard format on key "${key}": ${clean}`);
+            return clean;
+          }
+          if (/^[0-9a-fA-F]{40,64}$/.test(clean)) {
+            const fixedClean = "0x" + clean;
+            console.log(`[Circle Storage] [findAptosAddress] Found address matching raw hex on key "${key}". Fixed: ${fixedClean}`);
+            return fixedClean;
+          }
+          console.log(`[Circle Storage] [findAptosAddress] Key "${key}" string value didn't match regex: "${clean}"`);
         } else if (value && typeof value === "object") {
           const addr = findAptosAddress(value, visited);
-          if (addr) return addr;
+          if (addr) {
+            console.log(`[Circle Storage] [findAptosAddress] Address successfully retrieved from sub-object of key "${key}": ${addr}`);
+            return addr;
+          }
         }
       }
     }
 
-    // Inspect other custom descriptors recursively
+    // Inspect other custom descriptors recursively (ignoring keys already checked)
     for (const key in obj) {
+      if (priorityKeys.includes(key)) continue;
       if (Object.prototype.hasOwnProperty.call(obj, key)) {
-        const addr = findAptosAddress(obj[key], visited);
-        if (addr) return addr;
+        const value = obj[key];
+        console.log(`[Circle Storage] [findAptosAddress] Traversing nested fallback property "${key}" with type: ${typeof value}`);
+        const addr = findAptosAddress(value, visited);
+        if (addr) {
+          console.log(`[Circle Storage] [findAptosAddress] Address resolved from fallback property pathway "${key}": ${addr}`);
+          return addr;
+        }
       }
     }
   }
@@ -330,23 +366,26 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
 
   const connect = async (name: string): Promise<boolean> => {
     try {
-      console.log(`[Circle Storage] Connecting to wallet: ${name}`);
+      console.log(`[Circle Storage] Starting connection sequence for wallet: ${name}`);
       const cleanName = name.replace(" (Sandbox)", "").trim();
       
       let walletAddress: string | null = null;
 
       if (cleanName === "Developer Sandbox Wallet") {
-        walletAddress = "0xe990f736f23840ca81720eb6e567c82c6de3b3c3c3c3c3c3c3c3c3c39e7badabcdef";
+        console.log(`[Circle Storage] Bypassing connection sequence. Selecting Developer Sandbox Wallet address.`);
+        walletAddress = "0xe990f736f23840ca81720eb6e567c82c6de3b3c3c3c3c3c3c3c3c39e7badabcdef";
       } else {
         const provider = getWalletProvider(cleanName);
         const legacyProvider = getLegacyProvider(cleanName);
 
-        console.log(`[Circle Storage] Providers fetched:`, {
-          provider: provider ? typeof provider : "null",
-          legacyProvider: legacyProvider ? typeof legacyProvider : "null"
+        console.log(`[Circle Storage] Wallet provider references fetched:`, {
+          providerType: provider ? typeof provider : "null",
+          legacyType: legacyProvider ? typeof legacyProvider : "null",
+          hasFeatures: provider && provider.features ? Object.keys(provider.features) : []
         });
 
         if (!provider && !legacyProvider) {
+          console.warn(`[Circle Storage] Provider not found! Frame isolation check...`);
           const isNestedFrame = typeof window !== "undefined" && window.self !== window.top;
           if (isNestedFrame) {
             throw new Error(
@@ -367,45 +406,53 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
           const connectFeature = provider.features?.['standard:connect'] || provider.features?.['aptos:connect'];
           if (connectFeature) {
             try {
-              console.log(`[Circle Storage] Triggering standard AIP-62 connect request for ${cleanName}...`);
+              console.log(`[Circle Storage] Triggering standard AIP-62 connect request for user wallet: ${cleanName}...`);
               const result = await connectFeature.connect();
-              console.log(`[Circle Storage] AIP-62 connect result:`, result);
+              console.log(`[Circle Storage] AIP-62 connect returned payload structure:`, result);
               
               // Search result payload recursively
               walletAddress = findAptosAddress(result);
+              console.log(`[Circle Storage] Search check 1 result (from AIP-62 connect return):`, walletAddress);
               if (!walletAddress) {
                 walletAddress = findAptosAddress(provider);
+                console.log(`[Circle Storage] Search check 2 result (from provider object direct props):`, walletAddress);
               }
             } catch (aip62Err) {
               console.warn(`[Circle Storage] Standard AIP-62 connection failed or bypassed for ${cleanName}:`, aip62Err);
             }
+          } else {
+            console.log(`[Circle Storage] No AIP-62 connect standard features registered for provider: ${cleanName}`);
           }
         }
 
         // 2. Fall back to legacy providers connect() or property extraction
         if (!walletAddress) {
+          console.log(`[Circle Storage] Falling back to Legacy connect/account pathways for: ${cleanName}`);
           const activeProviders = [provider, legacyProvider].filter(Boolean);
           for (const prov of activeProviders) {
             if (walletAddress) break;
 
             // Try direct connect method if available
             if (typeof prov.connect === "function") {
-              console.log(`[Circle Storage] Triggering provider.connect() request...`);
+              console.log(`[Circle Storage] Triggering provider.connect() invocation...`);
               try {
                 const response = await prov.connect();
-                console.log(`[Circle Storage] Provider connect response payload:`, response);
+                console.log(`[Circle Storage] Legacy connect() returned response payload:`, response);
                 walletAddress = findAptosAddress(response);
+                console.log(`[Circle Storage] Search check 3 result (from legacy connect response):`, walletAddress);
               } catch (connectErr) {
-                console.warn(`[Circle Storage] connect() call failed on provider:`, connectErr);
+                console.warn(`[Circle Storage] Legacy connect() call failed on provider:`, connectErr);
               }
             }
 
             // Try direct account method if available
             if (!walletAddress && typeof prov.account === "function") {
               try {
+                console.log(`[Circle Storage] Triggering legacy provider.account() invocation...`);
                 const acc = await prov.account();
-                console.log(`[Circle Storage] Provider account() payload fallback:`, acc);
+                console.log(`[Circle Storage] Legacy account() returned response payload:`, acc);
                 walletAddress = findAptosAddress(acc);
+                console.log(`[Circle Storage] Search check 4 result (from legacy account() response):`, walletAddress);
               } catch (accErr) {
                 console.warn(`[Circle Storage] account() check failed:`, accErr);
               }
@@ -413,46 +460,57 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
 
             // Checking standard properties
             if (!walletAddress) {
+              console.log(`[Circle Storage] Checking direct properties on provider object...`);
               walletAddress = findAptosAddress(prov);
+              console.log(`[Circle Storage] Search check 5 result (from direct provider property scan):`, walletAddress);
             }
           }
         }
 
         // 3. Last resort fallback to standard global window contexts if we STILL have no address
         if (!walletAddress && typeof window !== "undefined") {
-          console.warn(`[Circle Storage] Attempting global namespace connection rescue...`);
+          console.warn(`[Circle Storage] Address not found yet. Attempting global namespace connection rescue...`);
           const fallbackCandidates = [
-            (window as any).petra,
-            (window as any).aptos,
-            (window as any).martian,
-            (window as any).pontem,
-            (window as any).riseWallet,
-            (window as any).rise
+            { label: "window.petra", instance: (window as any).petra },
+            { label: "window.aptos", instance: (window as any).aptos },
+            { label: "window.martian", instance: (window as any).martian },
+            { label: "window.pontem", instance: (window as any).pontem },
+            { label: "window.riseWallet", instance: (window as any).riseWallet },
+            { label: "window.rise", instance: (window as any).rise }
           ];
 
-          for (const rawProv of fallbackCandidates) {
-            if (rawProv) {
+          for (const cand of fallbackCandidates) {
+            if (cand.instance) {
+              console.log(`[Circle Storage] Probing fallback Candidate Context: ${cand.label}`);
               try {
-                if (typeof rawProv.isConnected === "function" && !(await rawProv.isConnected())) {
-                  const connRes = await rawProv.connect();
+                if (typeof cand.instance.isConnected === "function" && !(await cand.instance.isConnected())) {
+                  console.log(`[Circle Storage] Falling back to manual connection on context: ${cand.label}`);
+                  const connRes = await cand.instance.connect();
                   walletAddress = findAptosAddress(connRes);
+                  console.log(`[Circle Storage] Search check 6 result (from manual fallback connection):`, walletAddress);
                 }
-                if (!walletAddress && typeof rawProv.account === "function") {
-                  const acc = await rawProv.account();
+                if (!walletAddress && typeof cand.instance.account === "function") {
+                  const acc = await cand.instance.account();
                   walletAddress = findAptosAddress(acc);
+                  console.log(`[Circle Storage] Search check 7 result (from manual fallback account()):`, walletAddress);
                 }
                 if (!walletAddress) {
-                  walletAddress = findAptosAddress(rawProv);
+                  walletAddress = findAptosAddress(cand.instance);
+                  console.log(`[Circle Storage] Search check 8 result (from direct manual fallback context sweep):`, walletAddress);
                 }
-                if (walletAddress) break;
+                if (walletAddress) {
+                  console.log(`[Circle Storage] Successfully rescued connection using candidate context: ${cand.label}`);
+                  break;
+                }
               } catch (fallbackErr) {
-                console.warn("[Circle Storage] Fallback helper lookup failed:", fallbackErr);
+                console.warn(`[Circle Storage] Fallback helper lookup failed on candidate ${cand.label}:`, fallbackErr);
               }
             }
           }
         }
 
         if (!walletAddress) {
+          console.error(`[Circle Storage] Connection trace complete. Failure: Crucial address state could not be resolved!`);
           throw new Error(
             `A connection was made to the extension but we could not resolve your account's cryptographic address.\n\n` +
             `Please make sure your Petra wallet is unlocked and has at least one account created.`
@@ -465,11 +523,33 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
         walletAddress = String(walletAddress);
       }
       walletAddress = walletAddress.trim();
+      
+      // Enforce robust "0x" prefix checks and correct structure validation
       if (!walletAddress.startsWith("0x")) {
+        console.log(`[Circle Storage] Resolved address missing "0x" prefix. Prepending "0x" to raw hex string.`);
         walletAddress = "0x" + walletAddress;
       }
 
-      console.log(`[Circle Storage] Actual connected account detected: ${walletAddress}`);
+      console.log(`[Circle Storage] Execution finished tracing address value: "${walletAddress}"`);
+      
+      // Robust Address Verification Step
+      const cleanAddressPart = walletAddress.substring(2);
+      const isHexChars = /^[0-9a-fA-F]+$/.test(cleanAddressPart);
+      const isCorrectLength = walletAddress.length >= 3 && walletAddress.length <= 66;
+
+      if (!isHexChars || !isCorrectLength) {
+        console.error("[Circle Storage] CRITICAL: Parsed address validation failed!", {
+          address: walletAddress,
+          isHexChars,
+          isCorrectLength,
+          length: walletAddress.length
+        });
+        throw new Error(
+          `Resolved wallet account address "${walletAddress}" is not a cryptographically valid Aptos string (must start with "0x" and be up to 66 valid hex characters).`
+        );
+      }
+
+      console.log(`[Circle Storage] Security checks PASSED for account: ${walletAddress}`);
       setAddress(walletAddress);
       setConnected(true);
       setWalletName(cleanName);
