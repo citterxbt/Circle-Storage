@@ -104,7 +104,7 @@ export default function LandingPage({ onEnterApp }: LandingPageProps) {
 
       {/* Use Cases Section */}
       <motion.section 
-        className="py-20 px-6 lg:px-8 border-t border-white/10" 
+        className="min-h-screen scroll-mt-24 flex flex-col justify-center py-20 px-6 lg:px-8 border-t border-white/10" 
         id="use-cases-section"
         initial="hidden"
         whileInView="visible"
@@ -155,7 +155,7 @@ export default function LandingPage({ onEnterApp }: LandingPageProps) {
 
       {/* How It Works Section */}
       <motion.section 
-        className="py-20 px-6 lg:px-8 border-t border-white/10" 
+        className="min-h-screen scroll-mt-24 flex flex-col justify-center py-20 px-6 lg:px-8 border-t border-white/10" 
         id="how-it-works-section"
         initial="hidden"
         whileInView="visible"
@@ -233,7 +233,7 @@ export default function LandingPage({ onEnterApp }: LandingPageProps) {
 
       {/* FAQ Section */}
       <motion.section 
-        className="py-20 px-6 max-w-4xl mx-auto border-t border-white/10" 
+        className="min-h-screen scroll-mt-24 flex flex-col justify-center py-20 px-6 max-w-4xl mx-auto border-t border-white/10" 
         id="faq-section"
         initial="hidden"
         whileInView="visible"

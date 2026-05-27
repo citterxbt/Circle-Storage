@@ -123,18 +123,18 @@ function AppContent() {
   return (
     <div className="bg-gradient-to-br from-rose-950 via-[#180a13] to-[#251502] text-white min-h-screen font-sans flex flex-col justify-between selection:bg-pink-500/30 selection:text-white" id="circle-storage-app-root">
       
-      {/* App Specific Header */}
-      <header className="sticky top-0 z-50 bg-[#0c0308]/50 backdrop-blur-md border-b border-white/10 py-4" id="main-navigation-bar">
+      {/* App Specific Header - Transparent wrapper with premium individual glassmorphism capsules */}
+      <header className="sticky top-0 z-50 bg-transparent py-6 border-none select-none" id="main-navigation-bar">
         <div className="max-w-7xl mx-auto px-6 flex items-center justify-between gap-4">
           
-          {/* Top-Left Circular Gradient Logo & Brand redirecting to Landing */}
+          {/* Top-Left Circular Gradient Logo & Brand wrapped in a responsive premium glassmorphism capsule */}
           <div 
-            className="flex items-center gap-2.5 cursor-pointer group" 
+            className="flex items-center gap-2.5 cursor-pointer group px-5 py-2.5 bg-black/60 hover:bg-black/95 border border-white/10 hover:border-pink-500/50 rounded-full backdrop-blur-md transition-all duration-300 shadow-[0_4px_20px_rgba(0,0,0,0.4)] hover:scale-105 active:scale-95 hover:shadow-[0_0_20px_rgba(236,72,153,0.15)]" 
             onClick={() => setActiveTab("landing")} 
             id="brand-logo-trigger"
           >
             <div className="flex-shrink-0" id="header-circle-logo-frame">
-              <svg className="w-8 h-8 filter drop-shadow-[0_0_10px_rgba(236,72,153,0.3)] transition-transform duration-300 group-hover:scale-105" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" id="header-premium-logo-svg">
+              <svg className="w-6 h-6 filter drop-shadow-[0_0_10px_rgba(236,72,153,0.3)] transition-transform duration-300 group-hover:scale-105" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" id="header-premium-logo-svg">
                 <defs>
                   <linearGradient id="header-logo-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
                     <stop offset="0%" stopColor="#f472b6" /> {/* pink-400 */}
@@ -146,7 +146,7 @@ function AppContent() {
                 <circle cx="50" cy="50" r="23" fill="url(#header-logo-gradient)" />
               </svg>
             </div>
-            <span className="text-sm font-bold font-sans tracking-widest text-white/95 group-hover:text-pink-300 transition-colors uppercase hidden sm:inline-block">
+            <span className="text-xs font-bold font-sans tracking-widest text-white/95 group-hover:text-pink-300 transition-colors uppercase hidden sm:inline-block">
               Circle Storage
             </span>
           </div>
@@ -156,10 +156,10 @@ function AppContent() {
             <button
               id="btn-nav-upload"
               onClick={() => setActiveTab("upload")}
-              className={`px-5 py-2.5 text-sm font-bold font-sans rounded-full backdrop-blur-md transition-all duration-300 shadow-sm flex items-center justify-center tracking-wide hover:scale-105 active:scale-95 border ${
+              className={`px-5 py-2.5 text-xs font-bold uppercase tracking-wider rounded-full backdrop-blur-md transition-all duration-300 shadow-sm flex items-center justify-center hover:scale-105 active:scale-95 border ${
                 activeTab === "upload"
-                  ? "bg-pink-500/20 text-white border-pink-500/40 shadow-pink-500/10"
-                  : "text-white/70 bg-black/60 hover:bg-black/85 border-white/10 hover:border-pink-500/30"
+                  ? "bg-pink-500/20 text-white border-pink-500/50 shadow-pink-500/10"
+                  : "text-white/70 bg-black/60 hover:bg-black/95 border-white/10 hover:border-pink-500/50"
               }`}
             >
               Upload
@@ -167,10 +167,10 @@ function AppContent() {
             <button
               id="btn-nav-marketplace"
               onClick={() => setActiveTab("marketplace")}
-              className={`px-5 py-2.5 text-sm font-bold font-sans rounded-full backdrop-blur-md transition-all duration-300 shadow-sm flex items-center justify-center tracking-wide hover:scale-105 active:scale-95 border ${
+              className={`px-5 py-2.5 text-xs font-bold uppercase tracking-wider rounded-full backdrop-blur-md transition-all duration-300 shadow-sm flex items-center justify-center hover:scale-105 active:scale-95 border ${
                 activeTab === "marketplace"
-                  ? "bg-pink-500/20 text-white border-pink-500/40 shadow-pink-500/10"
-                  : "text-white/70 bg-black/60 hover:bg-black/85 border-white/10 hover:border-pink-500/30"
+                  ? "bg-pink-500/20 text-white border-pink-500/50 shadow-pink-500/10"
+                  : "text-white/70 bg-black/60 hover:bg-black/95 border-white/10 hover:border-pink-500/50"
               }`}
             >
               Marketplace
@@ -178,10 +178,10 @@ function AppContent() {
             <button
               id="btn-nav-leaderboard"
               onClick={() => setActiveTab("leaderboard")}
-              className={`px-5 py-2.5 text-sm font-bold font-sans rounded-full backdrop-blur-md transition-all duration-300 shadow-sm flex items-center justify-center tracking-wide hover:scale-105 active:scale-95 border ${
+              className={`px-5 py-2.5 text-xs font-bold uppercase tracking-wider rounded-full backdrop-blur-md transition-all duration-300 shadow-sm flex items-center justify-center hover:scale-105 active:scale-95 border ${
                 activeTab === "leaderboard"
-                  ? "bg-pink-500/20 text-white border-pink-500/40 shadow-pink-500/10"
-                  : "text-white/70 bg-black/60 hover:bg-black/85 border-white/10 hover:border-pink-500/30"
+                  ? "bg-pink-500/20 text-white border-pink-500/50 shadow-pink-500/10"
+                  : "text-white/70 bg-black/60 hover:bg-black/95 border-white/10 hover:border-pink-500/50"
               }`}
             >
               Leaderboard
@@ -189,10 +189,10 @@ function AppContent() {
             <button
               id="btn-nav-dashboard"
               onClick={() => setActiveTab("dashboard")}
-              className={`px-5 py-2.5 text-sm font-bold font-sans rounded-full backdrop-blur-md transition-all duration-300 shadow-sm flex items-center justify-center tracking-wide hover:scale-105 active:scale-95 border ${
+              className={`px-5 py-2.5 text-xs font-bold uppercase tracking-wider rounded-full backdrop-blur-md transition-all duration-300 shadow-sm flex items-center justify-center hover:scale-105 active:scale-95 border ${
                 activeTab === "dashboard"
-                  ? "bg-pink-500/20 text-white border-pink-500/40 shadow-pink-500/10"
-                  : "text-white/70 bg-black/60 hover:bg-black/85 border-white/10 hover:border-pink-500/30"
+                  ? "bg-pink-500/20 text-white border-pink-500/50 shadow-pink-500/10"
+                  : "text-white/70 bg-black/60 hover:bg-black/95 border-white/10 hover:border-pink-500/50"
               }`}
             >
               Dashboard
@@ -206,10 +206,10 @@ function AppContent() {
                 <button
                   id="btn-connected-wallet-dropdown-trigger"
                   onClick={() => setShowConnectedWalletMenu(!showConnectedWalletMenu)}
-                  className="px-5 py-2.5 bg-black/45 hover:bg-black/75 border border-white/15 hover:border-pink-500/35 rounded-full flex items-center gap-2.5 text-sm font-bold font-sans shadow-sm backdrop-blur-md cursor-pointer transition-all active:scale-95"
+                  className="px-5 py-2.5 bg-black/60 hover:bg-black/95 border border-white/10 hover:border-pink-500/50 rounded-full flex items-center gap-2.5 text-xs font-bold uppercase tracking-wider shadow-[0_4px_20px_rgba(0,0,0,0.4)] backdrop-blur-md cursor-pointer transition-all active:scale-95 hover:scale-105 hover:shadow-[0_0_20px_rgba(236,72,153,0.15)]"
                 >
-                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                  <span className="text-white font-mono uppercase font-semibold">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                  <span className="text-white font-mono lowercase font-semibold">
                     {truncateAddress(address)}
                   </span>
                 </button>
@@ -274,7 +274,7 @@ function AppContent() {
                 <button
                   id="btn-connect-wallet-trigger"
                   onClick={() => setShowWalletMenu(!showWalletMenu)}
-                  className="px-5 py-2.5 bg-gradient-to-r from-pink-500 to-amber-500 hover:from-pink-400 hover:to-amber-400 text-white font-sans font-bold text-sm rounded-full cursor-pointer flex items-center gap-1.5 transition-all shadow-md active:scale-95 border border-white/10"
+                  className="px-5 py-2.5 bg-gradient-to-r from-pink-500/80 to-amber-500/80 hover:from-pink-400 hover:to-amber-400 text-white font-sans font-bold text-xs uppercase tracking-wider rounded-full cursor-pointer flex items-center gap-1.5 transition-all shadow-md active:scale-95 border border-white/10 hover:scale-105"
                 >
                   <Coins className="w-4 h-4" />
                   Connect Wallet
@@ -298,13 +298,15 @@ function AppContent() {
             )}
           </div>
 
-          {/* Mobile responsive navigation trigger */}
-          <button
-            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-            className="md:hidden p-2 text-white/70 hover:text-white flex items-center focus:outline-none"
-          >
-            {mobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
-          </button>
+          {/* Mobile responsive navigation trigger - glassmorphism single capsule */}
+          <div className="md:hidden flex items-center px-4 py-2 bg-black/60 border border-white/10 rounded-full backdrop-blur-md hover:border-pink-500/30 transition-all shadow-[0_4px_20px_rgba(0,0,0,0.4)]">
+            <button
+              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+              className="text-white/70 hover:text-white flex items-center focus:outline-none"
+            >
+              {mobileMenuOpen ? <X className="w-6 h-6 animate-fade-in" /> : <Menu className="w-6 h-6 animate-fade-in" />}
+            </button>
+          </div>
         </div>
 
         {/* Mobile menu panel */}
@@ -389,52 +391,98 @@ function AppContent() {
       {/* Main Body with Classy Page Smooth Entrance Transition */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-6 py-12" id="main-content-canvas">
         <AnimatePresence mode="wait">
-          {activeTab === "marketplace" && (
+          {!connected || !address ? (
             <motion.div
-              key="marketplace"
+              key="wallet-gate-prompt"
               initial={pageTransition.initial}
               animate={pageTransition.animate}
               exit={pageTransition.exit}
               transition={pageTransition.transition}
+              className="max-w-md mx-auto my-12"
             >
-              <MarketplacePage />
+              <div 
+                className="bg-black/60 backdrop-blur-xl border border-white/10 rounded-3xl p-8 sm:p-10 shadow-[0_8px_32px_rgba(0,0,0,0.5)] flex flex-col items-center text-center gap-6" 
+                id="wallet-gate-container"
+              >
+                <div 
+                  className="w-16 h-16 rounded-full bg-gradient-to-tr from-pink-500/20 via-amber-500/10 to-transparent flex items-center justify-center border border-pink-500/30 text-pink-400 animate-pulse shadow-[0_0_30px_rgba(236,72,153,0.15)]" 
+                  id="gate-icon"
+                >
+                  <Coins className="w-8 h-8" />
+                </div>
+                <div>
+                  <h3 className="text-xl sm:text-2xl font-bold font-sans text-white tracking-tight mb-3">
+                    Wallet Signature Required
+                  </h3>
+                  <p className="text-sm text-white/60 leading-relaxed font-sans">
+                    Secure Web3 operations on Circle Storage require a connected Aptos wallet. Connect to handle decentralized uploading, encrypted file storage, and live marketplace deals.
+                  </p>
+                </div>
+                
+                <div className="w-full space-y-3 mt-2" id="gate-actions-block">
+                  {availableWallets.map((wallet) => (
+                    <button
+                      key={wallet}
+                      onClick={() => handleWalletSelect(wallet)}
+                      className="w-full py-3.5 px-5 bg-gradient-to-r from-pink-500/10 to-amber-500/10 hover:from-pink-500/20 hover:to-amber-500/20 border border-white/10 hover:border-pink-500/40 rounded-xl font-bold font-sans text-xs uppercase tracking-wider text-white transition-all duration-300 hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-2.5 cursor-pointer shadow-sm hover:shadow-[0_0_20px_rgba(236,72,153,0.1)] hover:text-pink-300"
+                    >
+                      <span className="w-2.5 h-2.5 rounded-full bg-pink-500"></span>
+                      Connect {wallet}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </motion.div>
-          )}
+          ) : (
+            <>
+              {activeTab === "marketplace" && (
+                <motion.div
+                  key="marketplace"
+                  initial={pageTransition.initial}
+                  animate={pageTransition.animate}
+                  exit={pageTransition.exit}
+                  transition={pageTransition.transition}
+                >
+                  <MarketplacePage />
+                </motion.div>
+              )}
 
-          {activeTab === "dashboard" && (
-            <motion.div
-              key="dashboard"
-              initial={pageTransition.initial}
-              animate={pageTransition.animate}
-              exit={pageTransition.exit}
-              transition={pageTransition.transition}
-            >
-              <DashboardPage />
-            </motion.div>
-          )}
+              {activeTab === "dashboard" && (
+                <motion.div
+                  key="dashboard"
+                  initial={pageTransition.initial}
+                  animate={pageTransition.animate}
+                  exit={pageTransition.exit}
+                  transition={pageTransition.transition}
+                >
+                  <DashboardPage />
+                </motion.div>
+              )}
 
-          {activeTab === "upload" && (
-            <motion.div
-              key="upload"
-              initial={pageTransition.initial}
-              animate={pageTransition.animate}
-              exit={pageTransition.exit}
-              transition={pageTransition.transition}
-            >
-              <FileUploadPage />
-            </motion.div>
-          )}
+              {activeTab === "upload" && (
+                <motion.div
+                  key="upload"
+                  initial={pageTransition.initial}
+                  animate={pageTransition.animate}
+                  exit={pageTransition.exit}
+                  transition={pageTransition.transition}
+                >
+                  <FileUploadPage />
+                </motion.div>
+              )}
 
-          {activeTab === "leaderboard" && (
-            <motion.div
-              key="leaderboard"
-              initial={pageTransition.initial}
-              animate={pageTransition.animate}
-              exit={pageTransition.exit}
-              transition={pageTransition.transition}
-            >
-              <LeaderboardPage />
-            </motion.div>
+              {activeTab === "leaderboard" && (
+                <motion.div
+                  key="leaderboard"
+                  initial={pageTransition.initial}
+                  animate={pageTransition.animate}
+                  exit={pageTransition.exit}
+                  transition={pageTransition.transition}
+                >
+                  <LeaderboardPage />
+                </motion.div>
+              )}
+            </>
           )}
         </AnimatePresence>
       </main>
