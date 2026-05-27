@@ -41,8 +41,8 @@ export default function LandingPage({ onEnterApp }: LandingPageProps) {
 
   return (
     <div className="bg-transparent text-white font-sans max-w-7xl mx-auto" id="landing-page-root">
-      {/* Hero Section */}
-      <section className="relative overflow-hidden py-24 sm:py-32" id="hero-section">
+      {/* Hero Section - Aligned to remaining viewport vertical fold */}
+      <section className="relative overflow-hidden min-h-[calc(100vh-73px)] flex flex-col justify-center py-12 md:py-20" id="hero-section">
         {/* Glow accent orb */}
         <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-gradient-to-tr from-pink-500/10 via-amber-500/10 to-transparent rounded-full blur-3xl -z-10"></div>
         
