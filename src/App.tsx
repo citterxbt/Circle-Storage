@@ -280,19 +280,46 @@ function AppContent() {
                   <Coins className="w-4 h-4" />
                   Connect Wallet
                 </button>
-                {showWalletMenu && (
-                  <div className="absolute right-0 mt-3 w-56 bg-[#1a0a14] border border-white/15 rounded-2xl shadow-xl p-3 z-50 text-sm text-left" id="wallet-dropdown-menu">
-                    <p className="text-[10px] font-mono text-white/50 uppercase tracking-widest p-1.5 font-bold">Select Wallet</p>
-                    {availableWallets.map((wallet) => (
-                      <button
-                        key={wallet}
-                        onClick={() => handleWalletSelect(wallet)}
-                        className="w-full text-left px-3 py-2 hover:bg-white/5 text-white/90 hover:text-pink-400 rounded-lg transition-colors flex items-center gap-2 cursor-pointer font-sans"
-                      >
-                        <span className="w-2 h-2 rounded-full bg-pink-500"></span>
-                        {wallet}
-                      </button>
-                    ))}
+                 {showWalletMenu && (
+                  <div className="absolute right-0 mt-3 w-64 bg-[#0c040a]/95 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-[0_12px_40px_rgba(0,0,0,0.8)] p-3.5 z-50 text-xs text-left space-y-2 animate-fade-in" id="wallet-dropdown-menu">
+                    <p className="text-[10px] font-mono text-white/40 uppercase tracking-widest pl-1.5 font-bold mb-1">Select Wallet</p>
+                    <div className="space-y-1.5" id="header-wallet-options">
+                      {availableWallets.map((wallet) => {
+                        const detected = isDetected ? isDetected(wallet) : false;
+                        return (
+                          <button
+                            key={wallet}
+                            onClick={() => {
+                              handleWalletSelect(wallet);
+                              setShowWalletMenu(false);
+                            }}
+                            className={`w-full py-2 px-3 flex items-center justify-between rounded-xl font-bold font-sans text-[11px] uppercase tracking-wider text-white transition-all duration-250 hover:scale-[1.01] active:scale-[0.99] border cursor-pointer ${
+                              detected 
+                                ? "bg-pink-500/10 hover:bg-pink-500/20 border-pink-500/30 hover:border-pink-500/60" 
+                                : "bg-black/30 hover:bg-black/50 border-white/5 text-white/70"
+                            }`}
+                          >
+                            <span className="flex items-center gap-2">
+                              {detected ? (
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_#34d399]" />
+                              ) : (
+                                <span className="w-1.5 h-1.5 rounded-full bg-white/20" />
+                              )}
+                              {wallet}
+                            </span>
+                            {detected ? (
+                              <span className="text-[8px] uppercase tracking-widest text-emerald-400 font-semibold scale-90 px-1.5 py-0.5 bg-emerald-500/10 border border-emerald-500/20 rounded">
+                                Detected
+                              </span>
+                            ) : (
+                              <span className="text-[8px] uppercase tracking-widest text-white/30 font-medium scale-90">
+                                Offline
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
                 )}
               </div>

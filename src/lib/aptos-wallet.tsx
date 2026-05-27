@@ -27,8 +27,23 @@ const getWalletProvider = (name: string): any => {
   
   const cleanName = name.replace(" (Sandbox)", "").trim();
   
+  // 1. Try AIP-62 standard wallet detection first
+  if ((window as any).aptosWeb3) {
+    const rx = (window as any).aptosWeb3.wallets || [];
+    const found = rx.find((w: any) => w.name === cleanName || w.name?.includes(cleanName) || cleanName.includes(w.name));
+    if (found) return found;
+  }
+
+  // 2. Fallbacks for standard browser property spaces
   if (cleanName === "Petra Wallet" || cleanName === "Petra") {
-    return (window as any).aptos || (window as any).petra;
+    // Avoid accessing window.petra at all under any circumstances since its property getter
+    // raises an instant deprecation exception in modern Petra Wallet versions on properties/calls.
+    try {
+      if ((window as any).aptos) return (window as any).aptos;
+    } catch (e) {
+      console.warn("[Circle Storage] Error checking window.aptos:", e);
+    }
+    return null;
   }
   if (cleanName === "Martian Wallet" || cleanName === "Martian") {
     return (window as any).martian;
@@ -43,20 +58,22 @@ const getWalletProvider = (name: string): any => {
     return (window as any).fewcha;
   }
   if (cleanName === "OKX Wallet" || cleanName === "OKX") {
-    return (window as any).okx?.aptos || (window as any).okx;
+    try {
+      if ((window as any).okx?.aptos) return (window as any).okx.aptos;
+      if ((window as any).okx) return (window as any).okx;
+    } catch {}
   }
   if (cleanName === "Trust Wallet" || cleanName === "Trust") {
-    return (window as any).trustWallet?.aptos || (window as any).trustWallet;
+    try {
+      if ((window as any).trustWallet?.aptos) return (window as any).trustWallet.aptos;
+      if ((window as any).trustWallet) return (window as any).trustWallet;
+    } catch {}
   }
   if (cleanName === "Nightly Wallet" || cleanName === "Nightly") {
-    return (window as any).nightly?.aptos || (window as any).nightly;
-  }
-
-  // Fallback checks for registered wallet list in Aptos Wallet Standard (AIP-62)
-  if ((window as any).aptosWeb3) {
-    const rx = (window as any).aptosWeb3.wallets || [];
-    const found = rx.find((w: any) => w.name === cleanName || w.name?.includes(cleanName));
-    if (found) return found;
+    try {
+      if ((window as any).nightly?.aptos) return (window as any).nightly.aptos;
+      if ((window as any).nightly) return (window as any).nightly;
+    } catch {}
   }
 
   return null;
