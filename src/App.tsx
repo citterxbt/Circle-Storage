@@ -59,32 +59,32 @@ function AppContent() {
         <div className="fixed inset-0 bg-gradient-to-b from-black/50 via-transparent to-black/75 z-5 pointer-events-none" />
         <div className="fixed inset-0 bg-radial-gradient from-transparent to-black/40 z-5 pointer-events-none" />
 
-        {/* Landing Navigation Header - Aligned in Height, Border, Padding & Sticky to match App Navigation */}
-        <header className="sticky top-0 z-50 bg-[#0c0308]/50 backdrop-blur-md border-b border-white/10 py-4" id="landing-navigation-bar">
+        {/* Landing Navigation Header - Pure transparent wrapper with premium individual glassmorphism capsules */}
+        <header className="sticky top-0 z-50 bg-transparent py-6 border-none select-none" id="landing-navigation-bar">
           <div className="max-w-7xl mx-auto px-6 flex items-center justify-center">
-            {/* Anchor Links wrapped in dark, transparent glassmorphism capsules with larger text */}
-            <nav className="flex items-center gap-3 flex-wrap justify-center animate-fade-in" id="landing-anchor-links">
+            {/* Anchor Links wrapped individually in premium, dark, translucent glassmorphism capsules */}
+            <nav className="flex items-center gap-4 flex-wrap justify-center animate-fade-in" id="landing-anchor-links">
               <a 
                 href="#hero-section" 
-                className="px-5 py-2 text-sm font-bold font-sans text-white/90 bg-black/60 hover:bg-black/85 border border-white/10 hover:border-pink-500/40 rounded-full backdrop-blur-md transition-all duration-300 shadow-sm flex items-center justify-center tracking-wide hover:scale-105 active:scale-95"
+                className="px-6 py-2.5 text-xs font-bold uppercase tracking-wider text-white/90 bg-black/60 hover:bg-black/95 border border-white/10 hover:border-pink-500/50 rounded-full backdrop-blur-md transition-all duration-300 shadow-[0_4px_20px_rgba(0,0,0,0.4)] flex items-center justify-center hover:scale-105 active:scale-95 hover:shadow-[0_0_20px_rgba(236,72,153,0.2)]"
               >
                 About
               </a>
               <a 
                 href="#use-cases-section" 
-                className="px-5 py-2 text-sm font-bold font-sans text-white/90 bg-black/60 hover:bg-black/85 border border-white/10 hover:border-pink-500/40 rounded-full backdrop-blur-md transition-all duration-300 shadow-sm flex items-center justify-center tracking-wide hover:scale-105 active:scale-95"
+                className="px-6 py-2.5 text-xs font-bold uppercase tracking-wider text-white/90 bg-black/60 hover:bg-black/95 border border-white/10 hover:border-pink-500/50 rounded-full backdrop-blur-md transition-all duration-300 shadow-[0_4px_20px_rgba(0,0,0,0.4)] flex items-center justify-center hover:scale-105 active:scale-95 hover:shadow-[0_0_20px_rgba(236,72,153,0.2)]"
               >
-                Use Case
+                Use Cases
               </a>
               <a 
                 href="#how-it-works-section" 
-                className="px-5 py-2 text-sm font-bold font-sans text-white/90 bg-black/60 hover:bg-black/85 border border-white/10 hover:border-pink-500/40 rounded-full backdrop-blur-md transition-all duration-300 shadow-sm flex items-center justify-center tracking-wide hover:scale-105 active:scale-95"
+                className="px-6 py-2.5 text-xs font-bold uppercase tracking-wider text-white/90 bg-black/60 hover:bg-black/95 border border-white/10 hover:border-pink-500/50 rounded-full backdrop-blur-md transition-all duration-300 shadow-[0_4px_20px_rgba(0,0,0,0.4)] flex items-center justify-center hover:scale-105 active:scale-95 hover:shadow-[0_0_20px_rgba(236,72,153,0.2)]"
               >
                 Protocol Flow
               </a>
               <a 
                 href="#faq-section" 
-                className="px-5 py-2 text-sm font-bold font-sans text-white/90 bg-black/60 hover:bg-black/85 border border-white/10 hover:border-pink-500/40 rounded-full backdrop-blur-md transition-all duration-300 shadow-sm flex items-center justify-center tracking-wide hover:scale-105 active:scale-95"
+                className="px-6 py-2.5 text-xs font-bold uppercase tracking-wider text-white/90 bg-black/60 hover:bg-black/95 border border-white/10 hover:border-pink-500/50 rounded-full backdrop-blur-md transition-all duration-300 shadow-[0_4px_20px_rgba(0,0,0,0.4)] flex items-center justify-center hover:scale-105 active:scale-95 hover:shadow-[0_0_20px_rgba(236,72,153,0.2)]"
               >
                 FAQ
               </a>
