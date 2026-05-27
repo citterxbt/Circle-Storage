@@ -19,11 +19,12 @@ type ActiveTab = "landing" | "marketplace" | "dashboard" | "upload" | "leaderboa
 function AppContent() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("landing");
   const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
-  const { connected, address, balance, shelbyUSDBalance, connect, disconnect, availableWallets } = useAptosWallet();
+  const { connected, address, balance, shelbyUSDBalance, connect, disconnect, availableWallets, isDetected } = useAptosWallet();
   const [showWalletMenu, setShowWalletMenu] = useState<boolean>(false);
   const [showConnectedWalletMenu, setShowConnectedWalletMenu] = useState<boolean>(false);
   const [showGoToTop, setShowGoToTop] = useState<boolean>(false);
   const [copied, setCopied] = useState<boolean>(false);
+  const [showGateWallets, setShowGateWallets] = useState<boolean>(false);
 
   useEffect(() => {
     const handleScroll = () => {
@@ -398,38 +399,82 @@ function AppContent() {
               animate={pageTransition.animate}
               exit={pageTransition.exit}
               transition={pageTransition.transition}
-              className="max-w-md mx-auto my-12"
+              className="max-w-xs mx-auto my-8"
             >
               <div 
-                className="bg-black/60 backdrop-blur-xl border border-white/10 rounded-3xl p-8 sm:p-10 shadow-[0_8px_32px_rgba(0,0,0,0.5)] flex flex-col items-center text-center gap-6" 
+                className="bg-[#0b0409]/90 backdrop-blur-xl border border-white/10 rounded-2xl p-6 shadow-[0_12px_32px_rgba(0,0,0,0.7)] flex flex-col items-center text-center gap-4" 
                 id="wallet-gate-container"
               >
                 <div 
-                  className="w-16 h-16 rounded-full bg-gradient-to-tr from-pink-500/20 via-amber-500/10 to-transparent flex items-center justify-center border border-pink-500/30 text-pink-400 animate-pulse shadow-[0_0_30px_rgba(236,72,153,0.15)]" 
+                  className="w-10 h-10 rounded-full bg-pink-500/10 flex items-center justify-center border border-pink-500/30 text-pink-400" 
                   id="gate-icon"
                 >
-                  <Coins className="w-8 h-8" />
+                  <Coins className="w-4 h-4 animate-pulse" />
                 </div>
                 <div>
-                  <h3 className="text-xl sm:text-2xl font-bold font-sans text-white tracking-tight mb-3">
-                    Wallet Signature Required
+                  <h3 className="text-xs font-bold uppercase tracking-widest text-white/95">
+                    Connection Required
                   </h3>
-                  <p className="text-sm text-white/60 leading-relaxed font-sans">
-                    Secure Web3 operations on Circle Storage require a connected Aptos wallet. Connect to handle decentralized uploading, encrypted file storage, and live marketplace deals.
+                  <p className="text-[11px] text-white/50 leading-relaxed font-sans mt-1.5 px-2">
+                    Connect an authorized Aptos extension to manage decentralized storage and live agreements.
                   </p>
                 </div>
                 
-                <div className="w-full space-y-3 mt-2" id="gate-actions-block">
-                  {availableWallets.map((wallet) => (
+                <div className="w-full" id="gate-actions-block">
+                  {!showGateWallets ? (
                     <button
-                      key={wallet}
-                      onClick={() => handleWalletSelect(wallet)}
-                      className="w-full py-3.5 px-5 bg-gradient-to-r from-pink-500/10 to-amber-500/10 hover:from-pink-500/20 hover:to-amber-500/20 border border-white/10 hover:border-pink-500/40 rounded-xl font-bold font-sans text-xs uppercase tracking-wider text-white transition-all duration-300 hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-2.5 cursor-pointer shadow-sm hover:shadow-[0_0_20px_rgba(236,72,153,0.1)] hover:text-pink-300"
+                      onClick={() => setShowGateWallets(true)}
+                      className="w-full py-2.5 px-4 bg-gradient-to-r from-pink-500 to-amber-500 text-white font-sans font-bold text-xs uppercase tracking-wider rounded-full hover:scale-102 active:scale-98 transition-all shadow-md flex items-center justify-center gap-1.5 cursor-pointer"
                     >
-                      <span className="w-2.5 h-2.5 rounded-full bg-pink-500"></span>
-                      Connect {wallet}
+                      <span>Connect Wallet</span>
                     </button>
-                  ))}
+                  ) : (
+                    <div className="space-y-2 animate-fade-in" id="gate-provider-options">
+                      <div className="text-[10px] uppercase font-semibold text-white/30 tracking-wider text-left pl-3 mb-1">
+                        Detected Extensions
+                      </div>
+                      
+                      {availableWallets.map((wallet) => {
+                        const detected = isDetected ? isDetected(wallet) : false;
+                        return (
+                          <button
+                            key={wallet}
+                            onClick={() => handleWalletSelect(wallet)}
+                            className={`w-full py-2 px-3 flex items-center justify-between rounded-lg font-bold font-sans text-[11px] uppercase tracking-wider text-white transition-all duration-300 hover:scale-[1.01] active:scale-[0.99] border cursor-pointer ${
+                              detected 
+                                ? "bg-pink-500/10 hover:bg-pink-500/20 border-pink-500/30 hover:border-pink-500/60" 
+                                : "bg-black/40 hover:bg-black/60 border-white/5 text-white/70"
+                            }`}
+                          >
+                            <span className="flex items-center gap-2">
+                              {detected ? (
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_#34d399]" />
+                              ) : (
+                                <span className="w-1.5 h-1.5 rounded-full bg-white/20" />
+                              )}
+                              {wallet}
+                            </span>
+                            {detected ? (
+                              <span className="text-[9px] uppercase tracking-widest text-emerald-400 font-medium scale-90 px-1.5 py-0.5 bg-emerald-500/10 border border-emerald-500/20 rounded">
+                                Detected
+                              </span>
+                            ) : (
+                              <span className="text-[8px] uppercase tracking-widest text-white/30 font-medium scale-90">
+                                Offline
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
+                      
+                      <button
+                        onClick={() => setShowGateWallets(false)}
+                        className="w-full pt-2 text-[9px] uppercase tracking-widest text-white/40 hover:text-white/70 transition-colors"
+                      >
+                        Cancel Selection
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
             </motion.div>
