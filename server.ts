@@ -7,12 +7,29 @@ import express from "express";
 import path from "path";
 import fs from "fs";
 import { createServer as createViteServer } from "vite";
+import { createClient } from "@supabase/supabase-js";
 import { UserProfile, FileMetadata, PurchaseRecord, LeaderboardRow } from "./src/types";
 
 const PORT = 3000;
 const DB_FILE = path.join(process.cwd(), "server-db.json");
 
-// Structure of our fully integrated local Database
+// Initialize Supabase if environment variables are provided, otherwise fallback to local JSON database gracefully
+const SUPABASE_URL = process.env.SUPABASE_URL || "";
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+
+let supabase: any = null;
+if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
+  try {
+    supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+    console.log("[Circle Storage] Supabase Database context initialized successfully with service role.");
+  } catch (err) {
+    console.error("[Circle Storage] Failed to initialize Supabase client instance:", err);
+  }
+} else {
+  console.log("[Circle Storage] Supabase variables not discovered in runtime. Operating local database layer.");
+}
+
+// Structure of our fully integrated local Database fallback
 interface DatabaseSchema {
   profiles: { [wallet: string]: UserProfile };
   files: {
@@ -63,10 +80,28 @@ async function startServer() {
   // API ROUTES
 
   // GET User Profile
-  app.get("/api/profiles/:wallet", (req, res) => {
+  app.get("/api/profiles/:wallet", async (req, res) => {
     const { wallet } = req.params;
     const cleanWallet = wallet.toLowerCase();
     
+    // 1. Try Supabase
+    if (supabase) {
+      try {
+        const { data, error } = await supabase
+          .from("profiles")
+          .select("*")
+          .eq("wallet_address", cleanWallet)
+          .maybeSingle();
+        
+        if (data) {
+          return res.json(data);
+        }
+      } catch (err) {
+        console.error("[Supabase DB Error] Profiles select failed:", err);
+      }
+    }
+
+    // 2. Fallback to Local JSON DB
     const profile = db.profiles[cleanWallet];
     if (profile) {
       return res.json(profile);
@@ -83,20 +118,32 @@ async function startServer() {
   });
 
   // GET ALL Profiles (Leaderboard metrics)
-  app.get("/api/profiles", (req, res) => {
+  app.get("/api/profiles", async (req, res) => {
+    if (supabase) {
+      try {
+        const { data, error } = await supabase
+          .from("profiles")
+          .select("*");
+        if (data) {
+          return res.json(data);
+        }
+      } catch (err) {
+        console.error("[Supabase DB Error] Global profiles request failed:", err);
+      }
+    }
+
     return res.json(Object.values(db.profiles));
   });
 
   // POST Create/Update Profile
-  app.post("/api/profiles", (req, res) => {
+  app.post("/api/profiles", async (req, res) => {
     const profile: UserProfile = req.body;
     if (!profile.wallet_address || !profile.username) {
       return res.status(400).json({ error: "Missing required profile parameters." });
     }
 
     const cleanWallet = profile.wallet_address.toLowerCase();
-    
-    db.profiles[cleanWallet] = {
+    const finalProfile: UserProfile = {
       wallet_address: cleanWallet,
       username: profile.username.trim(),
       avatar_url: profile.avatar_url || `https://api.dicebear.com/7.x/bottts/svg?seed=${cleanWallet}`,
@@ -106,13 +153,76 @@ async function startServer() {
       telegram_social: profile.telegram_social || ""
     };
 
+    if (supabase) {
+      try {
+        const { data, error } = await supabase
+          .from("profiles")
+          .upsert(finalProfile)
+          .select();
+        
+        if (error) {
+          console.error("[Supabase DB Error] Profiles upsert error details:", error);
+          return res.status(500).json({ error: "Failed to store settings profile in Supabase." });
+        }
+        if (data && data.length > 0) {
+          return res.json(data[0]);
+        }
+      } catch (err) {
+        console.error("[Supabase DB Error] Fatal profiles upsert failure:", err);
+        return res.status(500).json({ error: "Supabase connection error storing settings profile." });
+      }
+    }
+
+    db.profiles[cleanWallet] = finalProfile;
     saveDatabase(db);
     return res.json(db.profiles[cleanWallet]);
   });
 
   // GET FILES with optional filters (Marketplace vs Dashboard)
-  app.get("/api/files", (req, res) => {
+  app.get("/api/files", async (req, res) => {
     const { visibility, uploader } = req.query;
+
+    if (supabase) {
+      try {
+        let query = supabase.from("files").select("*");
+        if (visibility === "public") {
+          query = query.eq("visibility", "public");
+        }
+        if (uploader) {
+          query = query.eq("uploader", String(uploader).toLowerCase());
+        }
+
+        const { data: dbFiles, error: filesErr } = await query;
+        if (filesErr) {
+          console.error("[Supabase DB Error] Files selection error:", filesErr);
+          return res.status(500).json({ error: "Failed to query files from Supabase." });
+        }
+
+        // Fetch purchase logs in parallel
+        const { data: dbPurchases, error: purchasesErr } = await supabase.from("purchases").select("file_id");
+        const purchasesList = dbPurchases || [];
+
+        const fileList = (dbFiles || []).map((f: any) => {
+          const purchaseCount = purchasesList.filter((p: any) => p.file_id === f.id).length;
+          return {
+            id: f.id,
+            uploader: f.uploader,
+            name: f.name,
+            size: Number(f.size),
+            shelby_ref: f.shelby_ref,
+            price: Number(f.price),
+            visibility: f.visibility,
+            duration: f.duration,
+            created_at: f.created_at,
+            purchase_count: purchaseCount
+          };
+        });
+
+        return res.json(fileList);
+      } catch (err) {
+        console.error("[Supabase DB Error] Files endpoint logic failure:", err);
+      }
+    }
     
     let fileList = Object.values(db.files).map(f => {
       // Calculate purchase count for each file
@@ -144,7 +254,7 @@ async function startServer() {
   });
 
   // POST Upload storage file (stores encrypted data securely server-side)
-  app.post("/api/files/upload", (req, res) => {
+  app.post("/api/files/upload", async (req, res) => {
     const { uploader, name, size, shelby_ref, price, visibility, duration, file_data, content_type } = req.body;
 
     if (!uploader || !name || !shelby_ref || !duration || !file_data) {
@@ -153,9 +263,56 @@ async function startServer() {
 
     const id = "file_" + Math.random().toString(36).substring(2, 11);
     const cleanUploader = uploader.toLowerCase();
+    const aesKey = "aes_key_" + Math.random().toString(36).substring(2, 15);
 
-    // Store secure file + key in the database
-    // The server handles AES-256 key registration so that the raw payload cannot be parsed in transit or directly from the client without purchase
+    if (supabase) {
+      try {
+        // Enforce profiles seed insertion so reference constraints stay perfectly valid
+        const { data: profileCheck, error: pError } = await supabase
+          .from("profiles")
+          .select("wallet_address")
+          .eq("wallet_address", cleanUploader)
+          .maybeSingle();
+
+        if (!profileCheck) {
+          const defaultSeedProfile = {
+            wallet_address: cleanUploader,
+            username: `apt_pioneer_${cleanUploader.slice(2, 8)}`,
+            avatar_url: `https://api.dicebear.com/7.x/bottts/svg?seed=${cleanUploader}`,
+            bio: "Web3 early adopter on Aptos Shelby Testnet"
+          };
+          await supabase.from("profiles").insert(defaultSeedProfile);
+        }
+
+        const secureFilePayload = {
+          id,
+          uploader: cleanUploader,
+          name,
+          size: Number(size),
+          shelby_ref,
+          price: visibility === "private" ? 0 : Number(price) || 0,
+          visibility,
+          duration,
+          created_at: new Date().toISOString(),
+          aes_key: aesKey,
+          file_data,
+          content_type: content_type || "application/octet-stream"
+        };
+
+        const { error: insertError } = await supabase.from("files").insert(secureFilePayload);
+        if (insertError) {
+          console.error("[Supabase DB Error] File registration failed:", insertError);
+          return res.status(500).json({ error: "Failed to upload file to Supabase instance." });
+        }
+
+        return res.json({ id, status: "uploaded_success_registered", shelby_ref });
+      } catch (err) {
+        console.error("[Supabase DB Error] Fatal upload query loop:", err);
+        return res.status(500).json({ error: "Connection error saving secure file registry." });
+      }
+    }
+
+    // Store secure file + key in local database fallback
     db.files[id] = {
       id,
       uploader: cleanUploader,
@@ -166,7 +323,7 @@ async function startServer() {
       visibility,
       duration,
       created_at: new Date().toISOString(),
-      aes_key: "aes_key_" + Math.random().toString(36).substring(2, 15),
+      aes_key: aesKey,
       file_data,
       content_type: content_type || "application/octet-stream"
     };
@@ -184,16 +341,46 @@ async function startServer() {
     }
 
     const cleanBuyer = buyer.toLowerCase();
-    const targetFile = db.files[file_id];
 
-    if (!targetFile) {
-      return res.status(404).json({ error: "File listing not found." });
-    }
+    // 1. Fetch Target File Listing
+    let targetPrice = 0;
+    if (supabase) {
+      try {
+        const { data: targetFile, error: fileFetchError } = await supabase
+          .from("files")
+          .select("*")
+          .eq("id", file_id)
+          .maybeSingle();
 
-    // Check transaction re-use (double spending signature attack vectors)
-    const exists = db.purchases.some(p => p.tx_hash === tx_hash);
-    if (exists) {
-      return res.status(400).json({ error: "Transaction hash has already been redeemed." });
+        if (fileFetchError || !targetFile) {
+          return res.status(404).json({ error: "File listing not found in Supabase." });
+        }
+        targetPrice = targetFile.price;
+
+        const { data: existingTx } = await supabase
+          .from("purchases")
+          .select("id")
+          .eq("tx_hash", tx_hash)
+          .maybeSingle();
+
+        if (existingTx) {
+          return res.status(400).json({ error: "Transaction hash has already been redeemed." });
+        }
+
+      } catch (err) {
+        console.error("[Supabase DB Error] Verification mapping error", err);
+      }
+    } else {
+      const targetFile = db.files[file_id];
+      if (!targetFile) {
+        return res.status(404).json({ error: "File listing not found." });
+      }
+      targetPrice = targetFile.price;
+
+      const exists = db.purchases.some(p => p.tx_hash === tx_hash);
+      if (exists) {
+        return res.status(400).json({ error: "Transaction hash has already been redeemed." });
+      }
     }
 
     // Server-side verification routine
@@ -207,15 +394,7 @@ async function startServer() {
         
         // Confirm transaction status is success
         if (txData && txData.success === true) {
-          // Verify uploader received the reward on-chain
-          // Standard Aptos transfer payload checks or event stream tracking
           const sender = txData.sender.toLowerCase();
-          
-          // Verify the sender of the transaction matches the purchaser wallet,
-          // and uploader gets their funds.
-          // Note: Aptos transactions can be user transfers.
-          // In playground testing under sandboxed networks, sandbox transaction mocks might be used.
-          // Therefore, if it is a real transaction retrieved from fullnode, we perform the check.
           console.log(`Verified transaction ${tx_hash} on-chain. Sender: ${sender}`);
           verified = true;
         }
@@ -236,24 +415,54 @@ async function startServer() {
       return res.status(400).json({ error: "Failed to verify payment on Aptos Testnet explorer. Ensure transaction is successful." });
     }
 
-    // Payment is certified. Write purchase record.
+    const purchaseId = "purchase_" + Math.random().toString(36).substring(2, 11);
     const record: PurchaseRecord = {
-      id: "purchase_" + Math.random().toString(36).substring(2, 11),
+      id: purchaseId,
       file_id,
       buyer: cleanBuyer,
       tx_hash,
-      amount: Number(amount) || targetFile.price,
+      amount: Number(amount) || targetPrice,
       timestamp: new Date().toISOString()
     };
 
+    if (supabase) {
+      try {
+        // Enforce profile seed insertion for referencing constraints
+        const { data: pbCheck } = await supabase
+          .from("profiles")
+          .select("wallet_address")
+          .eq("wallet_address", cleanBuyer)
+          .maybeSingle();
+
+        if (!pbCheck) {
+          await supabase.from("profiles").insert({
+            wallet_address: cleanBuyer,
+            username: `apt_pioneer_${cleanBuyer.slice(2, 8)}`,
+            avatar_url: `https://api.dicebear.com/7.x/bottts/svg?seed=${cleanBuyer}`,
+            bio: "Web3 buyer on Aptos"
+          });
+        }
+
+        const { error: purchaseInsErr } = await supabase.from("purchases").insert(record);
+        if (purchaseInsErr) {
+          console.error("[Supabase DB Error] Failed to write purchase record:", purchaseInsErr);
+          return res.status(500).json({ error: "Failed to register transaction purchase in state storage." });
+        }
+
+        return res.json({ success: true, message: "On-chain payment verified successfully. Access granted.", record });
+      } catch (err) {
+        console.error("[Supabase DB Error] Fatal purchase insertion error:", err);
+        return res.status(500).json({ error: "Supabase connection error storing verification ledger." });
+      }
+    }
+
     db.purchases.push(record);
     saveDatabase(db);
-
     return res.json({ success: true, message: "On-chain payment verified successfully. Access granted.", record });
   });
 
-  // GET Download (Strict Gated File Access Layer)
-  app.post("/api/files/download", (req, res) => {
+  // GET Download (Strict Double-Gated Access Control Layer)
+  app.post("/api/files/download", async (req, res) => {
     const { file_id, wallet_address } = req.body;
 
     if (!file_id || !wallet_address) {
@@ -261,21 +470,64 @@ async function startServer() {
     }
 
     const cleanWallet = wallet_address.toLowerCase();
-    const targetFile = db.files[file_id];
 
+    if (supabase) {
+      try {
+        // Query secure encrypted file fields entirely server side (safe service-role privilege)
+        const { data: targetFile, error: fileFetchError } = await supabase
+          .from("files")
+          .select("*")
+          .eq("id", file_id)
+          .maybeSingle();
+
+        if (fileFetchError || !targetFile) {
+          return res.status(404).json({ error: "Requested file not registered." });
+        }
+
+        // Check 1: Is user the original file uploader?
+        const isUploader = targetFile.uploader.toLowerCase() === cleanWallet;
+
+        // Check 2: Verify direct on-chain purchase from purchases table
+        const { data: purchasedRecords, error: purchaseErr } = await supabase
+          .from("purchases")
+          .select("id")
+          .eq("file_id", file_id)
+          .eq("buyer", cleanWallet);
+
+        const hasPurchased = purchasedRecords && purchasedRecords.length > 0;
+
+        // Tight double-gating defense block
+        if (!isUploader && !hasPurchased) {
+          return res.status(403).json({
+            error: "ACCESS_DENIED",
+            message: "You have not verified an on-chain payment for this file. Content decrypted only after purchase."
+          });
+        }
+
+        // Access certified. Deliver AES ciphertext safely
+        return res.json({
+          name: targetFile.name,
+          content_type: targetFile.content_type,
+          shelby_ref: targetFile.shelby_ref,
+          data: targetFile.file_data // Base64 ciphertext delivered securely
+        });
+      } catch (err) {
+        console.error("[Supabase DB Error] Download access resolution failed:", err);
+        return res.status(500).json({ error: "Database permission validation encountered an internal error." });
+      }
+    }
+
+    // Legacy Local Database Fallback Logic
+    const targetFile = db.files[file_id];
     if (!targetFile) {
       return res.status(404).json({ error: "Requested file not found." });
     }
 
-    // Security check 1: Is user the uploader?
     const isUploader = targetFile.uploader.toLowerCase() === cleanWallet;
-
-    // Security check 2: Has buyer purchased this file on-chain?
     const hasPurchased = db.purchases.some(
       p => p.file_id === file_id && p.buyer.toLowerCase() === cleanWallet
     );
 
-    // Strict Gate Enforcement
     if (!isUploader && !hasPurchased) {
       return res.status(403).json({
         error: "ACCESS_DENIED",
@@ -283,17 +535,72 @@ async function startServer() {
       });
     }
 
-    // Access Certified. Deliver the encrypted structure and the decrypting descriptor.
     return res.json({
       name: targetFile.name,
       content_type: targetFile.content_type,
       shelby_ref: targetFile.shelby_ref,
-      data: targetFile.file_data // Base64 ciphertext delivered safely
+      data: targetFile.file_data
     });
   });
 
   // LEADERBOARD ranking aggregator API
-  app.get("/api/leaderboard", (req, res) => {
+  app.get("/api/leaderboard", async (req, res) => {
+    if (supabase) {
+      try {
+        const { data: profiles } = await supabase.from("profiles").select("*");
+        const { data: files } = await supabase.from("files").select("*");
+        const { data: purchases } = await supabase.from("purchases").select("*");
+
+        const leaderboard: { [wallet: string]: LeaderboardRow } = {};
+
+        (profiles || []).forEach((p: any) => {
+          leaderboard[p.wallet_address.toLowerCase()] = {
+            wallet_address: p.wallet_address,
+            username: p.username,
+            avatar_url: p.avatar_url,
+            total_uploads: 0,
+            total_earnings: 0
+          };
+        });
+
+        (files || []).forEach((f: any) => {
+          const uploader = f.uploader.toLowerCase();
+          if (!leaderboard[uploader]) {
+            leaderboard[uploader] = {
+              wallet_address: f.uploader,
+              username: f.uploader.slice(0, 10) + "...",
+              avatar_url: `https://api.dicebear.com/7.x/bottts/svg?seed=${f.uploader}`,
+              total_uploads: 0,
+              total_earnings: 0
+            };
+          }
+          leaderboard[uploader].total_uploads += 1;
+        });
+
+        (purchases || []).forEach((p: any) => {
+          const targetFile = (files || []).find((f: any) => f.id === p.file_id);
+          if (targetFile) {
+            const uploader = targetFile.uploader.toLowerCase();
+            if (!leaderboard[uploader]) {
+              leaderboard[uploader] = {
+                wallet_address: targetFile.uploader,
+                username: targetFile.uploader.slice(0, 10) + "...",
+                avatar_url: `https://api.dicebear.com/7.x/bottts/svg?seed=${targetFile.uploader}`,
+                total_uploads: 0,
+                total_earnings: 0
+              };
+            }
+            leaderboard[uploader].total_earnings += Number(p.amount) || 0;
+          }
+        });
+
+        const outputSorted = Object.values(leaderboard).sort((a, b) => b.total_earnings - a.total_earnings);
+        return res.json(outputSorted);
+      } catch (err) {
+        console.error("[Supabase DB Error] Leaderboard failure:", err);
+      }
+    }
+
     // Collect all profile records
     const leaderboard: { [wallet: string]: LeaderboardRow } = {};
 
@@ -346,9 +653,42 @@ async function startServer() {
   });
 
   // GET global metrics
-  app.get("/api/stats/:wallet", (req, res) => {
+  app.get("/api/stats/:wallet", async (req, res) => {
     const { wallet } = req.params;
     const cleanWallet = wallet.toLowerCase();
+
+    if (supabase) {
+      try {
+        // Exact count files uploaded
+        const { count, error } = await supabase
+          .from("files")
+          .select("*", { count: "exact", head: true })
+          .eq("uploader", cleanWallet);
+        
+        // Fetch files to compute total earnings
+        const { data: uploadedFiles } = await supabase
+          .from("files")
+          .select("id")
+          .eq("uploader", cleanWallet);
+        
+        let totalEarnings = 0;
+        if (uploadedFiles && uploadedFiles.length > 0) {
+          const fileIds = uploadedFiles.map((f: any) => f.id);
+          const { data: matchingPurchases } = await supabase
+            .from("purchases")
+            .select("amount")
+            .in("file_id", fileIds);
+          
+          if (matchingPurchases) {
+            totalEarnings = matchingPurchases.reduce((sum: number, p: any) => sum + Number(p.amount || 0), 0);
+          }
+        }
+
+        return res.json({ filesUploadedCount: count || 0, totalEarnings });
+      } catch (err) {
+        console.error("[Supabase DB Error] Statistics request failed:", err);
+      }
+    }
 
     const uploaderFiles = Object.values(db.files).filter(f => f.uploader.toLowerCase() === cleanWallet);
     const filesUploadedCount = uploaderFiles.length;
