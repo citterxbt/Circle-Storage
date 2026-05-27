@@ -397,18 +397,40 @@ function AppContent() {
                   </div>
                 </div>
               ) : (
-                <div className="space-y-2 text-center">
+                <div className="space-y-1.5 text-center">
                   <p className="text-[10px] uppercase font-mono text-white/50 px-3 text-left">Choose Wallet</p>
-                  {availableWallets.map((wallet) => (
-                    <button
-                      key={wallet}
-                      onClick={() => { handleWalletSelect(wallet); setMobileMenuOpen(false); }}
-                      className="w-full text-left px-4 py-2 bg-white/5 hover:bg-white/10 text-white/90 rounded-xl text-xs transition-colors flex items-center gap-2"
-                    >
-                      <span className="w-2 h-2 rounded-full bg-pink-500"></span>
-                      {wallet}
-                    </button>
-                  ))}
+                  {availableWallets.map((wallet) => {
+                    const detected = isDetected ? isDetected(wallet) : false;
+                    return (
+                      <button
+                        key={wallet}
+                        onClick={() => { handleWalletSelect(wallet); setMobileMenuOpen(false); }}
+                        className={`w-full py-2 px-3.5 flex items-center justify-between rounded-xl font-bold font-sans text-[11px] uppercase tracking-wider text-white transition-all duration-300 hover:scale-[1.01] active:scale-[0.99] border cursor-pointer ${
+                          detected 
+                            ? "bg-pink-500/10 hover:bg-pink-500/20 border-pink-500/30 hover:border-pink-500/60" 
+                            : "bg-black/45 hover:bg-black/60 border-white/5 text-white/70"
+                        }`}
+                      >
+                        <span className="flex items-center gap-2">
+                          {detected ? (
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_#34d399]" />
+                          ) : (
+                            <span className="w-1.5 h-1.5 rounded-full bg-white/20" />
+                          )}
+                          {wallet}
+                        </span>
+                        {detected ? (
+                          <span className="text-[8px] uppercase tracking-widest text-emerald-400 font-semibold scale-90 px-1.5 py-0.5 bg-emerald-500/10 border border-emerald-500/20 rounded">
+                            Detected
+                          </span>
+                        ) : (
+                          <span className="text-[8px] uppercase tracking-widest text-white/30 font-medium scale-90">
+                            Offline
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
                 </div>
               )}
             </div>

@@ -30,8 +30,27 @@ const getWalletProvider = (name: string): any => {
   // 1. Try AIP-62 standard wallet detection first
   if ((window as any).aptosWeb3) {
     const rx = (window as any).aptosWeb3.wallets || [];
-    const found = rx.find((w: any) => w.name === cleanName || w.name?.includes(cleanName) || cleanName.includes(w.name));
-    if (found) return found;
+    const found = rx.find((w: any) => {
+      if (!w || !w.name) return false;
+      const wName = w.name.toLowerCase().trim();
+      const cName = cleanName.toLowerCase().trim();
+      return (
+        wName === cName ||
+        wName.includes(cName) ||
+        cName.includes(wName) ||
+        (cName.includes("petra") && wName.includes("petra")) ||
+        (cName.includes("martian") && wName.includes("martian")) ||
+        (cName.includes("pontem") && wName.includes("pontem")) ||
+        (cName.includes("rise") && wName.includes("rise")) ||
+        (cName.includes("okx") && wName.includes("okx")) ||
+        (cName.includes("trust") && wName.includes("trust")) ||
+        (cName.includes("nightly") && wName.includes("nightly"))
+      );
+    });
+    if (found) {
+      console.log(`[Circle Storage] Standard AIP-62 wallet matches found for ${cleanName}:`, found.name);
+      return found;
+    }
   }
 
   // 2. Fallbacks for standard browser property spaces
@@ -41,7 +60,7 @@ const getWalletProvider = (name: string): any => {
     try {
       if ((window as any).aptos) return (window as any).aptos;
     } catch (e) {
-      console.warn("[Circle Storage] Error checking window.aptos:", e);
+      console.warn("[Circle Storage] Error checking window.aptos fallback:", e);
     }
     return null;
   }
@@ -233,16 +252,27 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
       let walletAddress: string | null = null;
 
       // 1. Try modern Aptos Wallet Standard (AIP-62) connect feature
-      if (provider.features && provider.features['aptos:connect']) {
+      const connectFeature = provider.features?.['standard:connect'] || provider.features?.['aptos:connect'];
+      if (connectFeature) {
         console.log(`[Circle Storage] Triggering standard AIP-62 connect request for ${cleanName}...`);
-        const result = await provider.features['aptos:connect'].connect();
+        const result = await connectFeature.connect();
+        console.log(`[Circle Storage] AIP-62 connect result:`, result);
         
         const accounts = result?.accounts || result?.[0]?.accounts;
-        const mainAccount = accounts?.[0] || result?.[0] || result;
-        walletAddress = mainAccount?.address || result?.address || result;
+        if (accounts && accounts.length > 0) {
+          walletAddress = accounts[0].address;
+        } else if (result && result.address) {
+          walletAddress = result.address;
+        } else if (Array.isArray(result) && result[0]?.address) {
+          walletAddress = result[0].address;
+        } else if (result?.accounts?.[0]) {
+          walletAddress = result.accounts[0].address;
+        } else {
+          walletAddress = result;
+        }
       } 
-      // 2. Fall back to clean window call if AIP-62 connect feature is not present
-      else if (typeof provider.connect === "function") {
+      // 2. Fall back to clean window call if AIP-62 connect feature is not present and NOT Petra Wallet to prevent deprecation alerts
+      else if (typeof provider.connect === "function" && cleanName !== "Petra" && cleanName !== "Petra Wallet") {
         console.log(`[Circle Storage] Triggering legacy provider.connect() request for ${cleanName}...`);
         const response = await provider.connect();
         walletAddress = response?.address || response?.walletAddress || response;
@@ -326,9 +356,10 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
         const provider = getWalletProvider(walletName);
         if (provider) {
           // 1. Try Aptos Wallet Standard (AIP-62) signAndSubmitTransaction
-          if (provider.features && provider.features['aptos:signAndSubmitTransaction']) {
+          const signFeature = provider.features?.['aptos:signAndSubmitTransaction'] || provider.features?.['standard:signAndSubmitTransaction'];
+          if (signFeature) {
             console.log(`[Circle Storage] Signing transaction via AIP-62 feature on ${walletName}...`);
-            const result = await provider.features['aptos:signAndSubmitTransaction'].signAndSubmitTransaction({
+            const result = await signFeature.signAndSubmitTransaction({
               payload: payload
             });
             return { hash: result?.hash || finalHash };
