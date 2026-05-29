@@ -21,16 +21,67 @@ interface AptosWalletContextType {
 
 const AptosWalletContext = createContext<AptosWalletContextType | undefined>(undefined);
 
+// Keep a global registry of detected AIP-62 standard wallets to ensure async announcements are captured
+let registeredStandardWallets: any[] = [];
+
+if (typeof window !== "undefined") {
+  // Capture any standard wallets registered before or during load
+  if ((window as any).aptosWeb3?.wallets) {
+    try {
+      registeredStandardWallets = [...(window as any).aptosWeb3.wallets];
+    } catch {}
+  }
+
+  const addStandardWallet = (wallet: any) => {
+    if (!wallet || !wallet.name) return;
+    if (!registeredStandardWallets.some(w => w.name === wallet.name)) {
+      console.log(`[Circle Storage] [AIP-62 Registry] Registered standard wallet: "${wallet.name}"`);
+      registeredStandardWallets.push(wallet);
+      // Trigger a custom event to notify React to refresh its list of available wallets
+      try {
+        window.dispatchEvent(new CustomEvent("circle-storage-wallet-registered"));
+      } catch {}
+    }
+  };
+
+  try {
+    // Listen to standard announce events
+    window.addEventListener("wallet-standard:register-wallet", (event: any) => {
+      try {
+        if (event.detail && typeof event.detail.register === "function") {
+          event.detail.register((wallet: any) => {
+            addStandardWallet(wallet);
+            return () => {}; // return unregister callback
+          });
+        }
+      } catch (e) {
+        console.warn("[Circle Storage] Error processing wallet-standard:register-wallet event:", e);
+      }
+    });
+
+    window.addEventListener("aptos-wallet-announced", (event: any) => {
+      try {
+        if (event.detail) {
+          addStandardWallet(event.detail);
+        }
+      } catch (e) {
+        console.warn("[Circle Storage] Error processing aptos-wallet-announced event:", e);
+      }
+    });
+  } catch (err) {
+    console.warn("[Circle Storage] Failed to initialize standard wallet event listeners:", err);
+  }
+}
+
 // Helper function to safely locate the browser extension provider mapping a given name
 const getWalletProvider = (name: string): any => {
   if (typeof window === "undefined") return null;
   
   const cleanName = name.replace(" (Sandbox)", "").trim();
   
-  // 1. Try AIP-62 standard wallet detection first
-  if ((window as any).aptosWeb3) {
-    const rx = (window as any).aptosWeb3.wallets || [];
-    const found = rx.find((w: any) => {
+  const findInList = (list: any[]) => {
+    if (!list || !Array.isArray(list)) return null;
+    return list.find((w: any) => {
       if (!w || !w.name) return false;
       const wName = w.name.toLowerCase().trim();
       const cName = cleanName.toLowerCase().trim();
@@ -47,13 +98,40 @@ const getWalletProvider = (name: string): any => {
         (cName.includes("nightly") && wName.includes("nightly"))
       );
     });
+  };
+
+  // 1. Try from early-registered standard wallets (extremely reliable)
+  const earlyFound = findInList(registeredStandardWallets);
+  if (earlyFound) {
+    console.log(`[Circle Storage] Standard AIP-62 registered wallet match for ${cleanName}:`, earlyFound.name);
+    return earlyFound;
+  }
+
+  // 2. Try standard window.aptosWeb3 wallets
+  if ((window as any).aptosWeb3) {
+    const rx = (window as any).aptosWeb3.wallets || [];
+    const found = findInList(rx);
     if (found) {
-      console.log(`[Circle Storage] Standard AIP-62 wallet matches found for ${cleanName}:`, found.name);
+      console.log(`[Circle Storage] Standard AIP-62 window wallets match for ${cleanName}:`, found.name);
       return found;
     }
   }
 
-  // 2. Fallbacks for standard browser property spaces
+  // 3. Try standard window.navigator.wallets fallbacks
+  if ((window as any).navigator?.wallets) {
+    try {
+      const g = (window as any).navigator.wallets.get;
+      if (typeof g === "function") {
+        const found = findInList(g.call((window as any).navigator.wallets));
+        if (found) {
+          console.log(`[Circle Storage] Standard AIP-62 navigator wallets match for ${cleanName}:`, found.name);
+          return found;
+        }
+      }
+    } catch {}
+  }
+
+  // 4. Fallbacks for standard browser property spaces
   if (cleanName === "Petra Wallet" || cleanName === "Petra") {
     try {
       if ((window as any).petra) return (window as any).petra;
@@ -493,6 +571,7 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
     if (typeof window !== "undefined") {
       window.addEventListener("wallet-standard:register-wallet", detectInjectedWallets);
       window.addEventListener("aptos-wallet-announced", detectInjectedWallets);
+      window.addEventListener("circle-storage-wallet-registered", detectInjectedWallets);
     }
 
     // Retrieve previous connected wallet session
@@ -522,6 +601,7 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
       if (typeof window !== "undefined") {
         window.removeEventListener("wallet-standard:register-wallet", detectInjectedWallets);
         window.removeEventListener("aptos-wallet-announced", detectInjectedWallets);
+        window.removeEventListener("circle-storage-wallet-registered", detectInjectedWallets);
       }
     };
   }, []);
@@ -638,8 +718,21 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
               console.log(`[Circle Storage] [Legacy Connect Complete] Returned response payload:`, response);
               walletAddress = await probeInstanceForAddress(response) || await probeInstanceForAddress(prov);
               console.log(`[Circle Storage] [Address Scan Step 3] Check on response/provider payload: "${walletAddress}"`);
-            } catch (connectErr) {
-              console.warn(`[Circle Storage] [Legacy Connect Error] connect() call failed on provider:`, connectErr);
+            } catch (connectErr: any) {
+              console.warn(`[Circle Storage] [Legacy Connect Error] connect() call failed on provider:`, connectErr?.message || connectErr);
+              // Fallback: If it's a DeprecatedApiError/warning, maybe standard window.aptos features can be used on it!
+              if (prov.features) {
+                try {
+                  const subConn = prov.features['standard:connect'] || prov.features['aptos:connect'];
+                  if (subConn && typeof subConn.connect === "function") {
+                    console.log("[Circle Storage] Using standard features fallback on throw provider...");
+                    const subRes = await subConn.connect();
+                    walletAddress = await probeInstanceForAddress(subRes) || await probeInstanceForAddress(prov);
+                  }
+                } catch (subErr) {
+                  console.warn("[Circle Storage] Failed inside features fallback:", subErr);
+                }
+              }
             }
           }
 
@@ -651,16 +744,20 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
               console.log(`[Circle Storage] [Legacy Account Complete] Returned response payload:`, acc);
               walletAddress = await probeInstanceForAddress(acc);
               console.log(`[Circle Storage] [Address Scan Step 4] Check on legacy account response: "${walletAddress}"`);
-            } catch (accErr) {
-              console.warn(`[Circle Storage] [Legacy Account Error] account() check failed:`, accErr);
+            } catch (accErr: any) {
+              console.warn(`[Circle Storage] [Legacy Account Error] account() check failed:`, accErr?.message || accErr);
             }
           }
 
           // C. Checking standard properties directly on provider metadata
           if (!walletAddress) {
-            console.log(`[Circle Storage] [Direct Extraction Stage] Sweeping direct properties on provider instance...`);
-            walletAddress = await probeInstanceForAddress(prov);
-            console.log(`[Circle Storage] [Address Scan Step 5] Check on direct properties: "${walletAddress}"`);
+            try {
+              console.log(`[Circle Storage] [Direct Extraction Stage] Sweeping direct properties on provider instance...`);
+              walletAddress = await probeInstanceForAddress(prov);
+              console.log(`[Circle Storage] [Address Scan Step 5] Check on direct properties: "${walletAddress}"`);
+            } catch (sweepErr) {
+              console.warn("[Circle Storage] Probe direct sweep error:", sweepErr);
+            }
           }
         }
       }
@@ -681,22 +778,55 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
           if (cand.instance) {
             console.log(`[Circle Storage] [Rescue Candidate Probing] Probing global: "${cand.label}"`);
             try {
-              if (typeof cand.instance.isConnected === "function" && !(await cand.instance.isConnected())) {
-                console.log(`[Circle Storage] [Rescue Connected State] Context reports offline. Invoking cand.connect()...`);
-                const connRes = await cand.instance.connect();
-                walletAddress = await probeInstanceForAddress(connRes) || await probeInstanceForAddress(cand.instance);
-                console.log(`[Circle Storage] [Address Scan Step 6] Check on rescue connect: "${walletAddress}"`);
+              // A. If candidate has standard AIP-62 features, connect using standard Connect
+              if (cand.instance.features) {
+                try {
+                  const connFeature = cand.instance.features['standard:connect'] || cand.instance.features['aptos:connect'];
+                  if (connFeature && typeof connFeature.connect === "function") {
+                    console.log(`[Circle Storage] [Rescue AIP-62 Connect] Triggering standard connect on: ${cand.label}`);
+                    const connRes = await connFeature.connect();
+                    walletAddress = await probeInstanceForAddress(connRes) || await probeInstanceForAddress(cand.instance);
+                  }
+                } catch (stdErr: any) {
+                  console.warn(`[Circle Storage] Standard connect failed on rescue candidate ${cand.label}:`, stdErr?.message || stdErr);
+                }
               }
+
+              // B. Try legacy connect if not standard or if standard connect did not yield address
+              if (!walletAddress && typeof cand.instance.connect === "function") {
+                try {
+                  console.log(`[Circle Storage] [Rescue Legacy Connect] Invoking cand.instance.connect() for ${cand.label}`);
+                  const connRes = await cand.instance.connect();
+                  walletAddress = await probeInstanceForAddress(connRes) || await probeInstanceForAddress(cand.instance);
+                } catch (legacyErr: any) {
+                  console.warn(`[Circle Storage] Legacy connect failed on rescue candidate ${cand.label}:`, legacyErr?.message || legacyErr);
+                }
+              }
+
+              // C. Check isConnected safely (wrapping in try-catch to absorb Petra DeprecatedApiError)
+              if (!walletAddress && typeof cand.instance.isConnected === "function") {
+                try {
+                  console.log(`[Circle Storage] Checking isConnected on ${cand.label} safely...`);
+                  const isConnected = await cand.instance.isConnected();
+                  if (isConnected) {
+                    walletAddress = await probeInstanceForAddress(cand.instance);
+                  }
+                } catch (chkErr: any) {
+                  console.warn(`[Circle Storage] Safely caught isConnected check thrown on ${cand.label}:`, chkErr?.message || chkErr);
+                }
+              }
+
+              // D. Fall back to sweeping properties recursively
               if (!walletAddress) {
                 walletAddress = await probeInstanceForAddress(cand.instance);
-                console.log(`[Circle Storage] [Address Scan Step 7] Check on rescue sweeping: "${walletAddress}"`);
               }
+
               if (walletAddress) {
                 console.log(`[Circle Storage] [Rescue Success] Resolved address from candidate "${cand.label}": "${walletAddress}"`);
                 break;
               }
-            } catch (fallbackErr) {
-              console.warn(`[Circle Storage] [Rescue Candidate Error] Fallback helper lookup failed on candidate ${cand.label}:`, fallbackErr);
+            } catch (fallbackErr: any) {
+              console.warn(`[Circle Storage] [Rescue Candidate Error] Fallback helper lookup failed on candidate ${cand.label}:`, fallbackErr?.message || fallbackErr);
             }
           }
         }
