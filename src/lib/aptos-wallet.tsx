@@ -68,6 +68,34 @@ if (typeof window !== "undefined") {
         console.warn("[Circle Storage] Error processing aptos-wallet-announced event:", e);
       }
     });
+
+    // Dispatch the app-ready event so existing/pre-loaded standard wallets register themselves immediately
+    const dispatchAppReady = () => {
+      console.log("[Circle Storage] [AIP-62 Dispatch] Broadcasting standard app-ready signals...");
+      window.dispatchEvent(
+        new CustomEvent("wallet-standard:app-ready", {
+          detail: {
+            register: (wallet: any) => {
+              addStandardWallet(wallet);
+            }
+          }
+        })
+      );
+    };
+
+    dispatchAppReady();
+    if (document.readyState === "complete") {
+      dispatchAppReady();
+    } else {
+      window.addEventListener("load", () => {
+        dispatchAppReady();
+        setTimeout(dispatchAppReady, 200);
+      });
+    }
+    setTimeout(dispatchAppReady, 100);
+    setTimeout(dispatchAppReady, 500);
+    setTimeout(dispatchAppReady, 1000);
+    setTimeout(dispatchAppReady, 2000);
   } catch (err) {
     console.warn("[Circle Storage] Failed to initialize standard wallet event listeners:", err);
   }
@@ -378,39 +406,48 @@ const probeInstanceForAddress = async (instance: any): Promise<string | null> =>
     return directSweep;
   }
 
-  // Try calling account()
-  if (typeof instance.account === "function") {
-    try {
-      const acc = await instance.account();
-      console.log("[Circle Storage] [probeInstanceForAddress] Called instance.account():", acc);
-      const res = extractAddress(acc) || findAptosAddress(acc);
-      if (res) return res;
-    } catch (e) {
-      console.warn("[Circle Storage] Error pattern calling instance.account():", e);
-    }
-  }
+  // Avoid calling deprecated functions on raw legacy Petra client
+  const isRawPetra = typeof window !== "undefined" && (
+    instance === (window as any).petra || 
+    instance === (window as any).aptos || 
+    (instance && typeof instance.name === "string" && instance.name.toLowerCase().includes("petra"))
+  );
 
-  // Try calling accounts()
-  if (typeof instance.accounts === "function") {
-    try {
-      const accs = await instance.accounts();
-      console.log("[Circle Storage] [probeInstanceForAddress] Called instance.accounts():", accs);
-      const res = extractAddress(accs) || findAptosAddress(accs);
-      if (res) return res;
-    } catch (e) {
-      console.warn("[Circle Storage] Error pattern calling instance.accounts():", e);
+  if (!isRawPetra) {
+    // Try calling account()
+    if (typeof instance.account === "function") {
+      try {
+        const acc = await instance.account();
+        console.log("[Circle Storage] [probeInstanceForAddress] Called instance.account():", acc);
+        const res = extractAddress(acc) || findAptosAddress(acc);
+        if (res) return res;
+      } catch (e) {
+        console.warn("[Circle Storage] Error pattern calling instance.account():", e);
+      }
     }
-  }
 
-  // Try calling getAccount()
-  if (typeof instance.getAccount === "function") {
-    try {
-      const acc = await instance.getAccount();
-      console.log("[Circle Storage] [probeInstanceForAddress] Called instance.getAccount():", acc);
-      const res = extractAddress(acc) || findAptosAddress(acc);
-      if (res) return res;
-    } catch (e) {
-      console.warn("[Circle Storage] Error pattern calling instance.getAccount():", e);
+    // Try calling accounts()
+    if (typeof instance.accounts === "function") {
+      try {
+        const accs = await instance.accounts();
+        console.log("[Circle Storage] [probeInstanceForAddress] Called instance.accounts():", accs);
+        const res = extractAddress(accs) || findAptosAddress(accs);
+        if (res) return res;
+      } catch (e) {
+        console.warn("[Circle Storage] Error pattern calling instance.accounts():", e);
+      }
+    }
+
+    // Try calling getAccount()
+    if (typeof instance.getAccount === "function") {
+      try {
+        const acc = await instance.getAccount();
+        console.log("[Circle Storage] [probeInstanceForAddress] Called instance.getAccount():", acc);
+        const res = extractAddress(acc) || findAptosAddress(acc);
+        if (res) return res;
+      } catch (e) {
+        console.warn("[Circle Storage] Error pattern calling instance.getAccount():", e);
+      }
     }
   }
 
@@ -687,9 +724,27 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
             const result = await connectFeature.connect();
             console.log(`[Circle Storage] [AIP-62 Connect Complete] Response payload:`, result);
             
-            // Search result payload carefully
-            walletAddress = await probeInstanceForAddress(result);
-            console.log(`[Circle Storage] [Address Scan Step 1] Check on response container yields address: "${walletAddress}"`);
+            // Extract accounts from result or provider state directly first
+            if (result && result.accounts && Array.isArray(result.accounts) && result.accounts.length > 0) {
+              const standardAcc = result.accounts[0];
+              if (standardAcc && standardAcc.address) {
+                walletAddress = standardAcc.address;
+                console.log(`[Circle Storage] Resolved standard account address via connect result.accounts[0]: "${walletAddress}"`);
+              }
+            }
+
+            if (!walletAddress && provider.accounts && Array.isArray(provider.accounts) && provider.accounts.length > 0) {
+              const standardAcc = provider.accounts[0];
+              if (standardAcc && standardAcc.address) {
+                walletAddress = standardAcc.address;
+                console.log(`[Circle Storage] Resolved standard account address via provider.accounts[0]: "${walletAddress}"`);
+              }
+            }
+
+            if (!walletAddress) {
+              walletAddress = await probeInstanceForAddress(result);
+              console.log(`[Circle Storage] [Address Scan Step 1] Check on response container yields address: "${walletAddress}"`);
+            }
             
             if (!walletAddress) {
               console.log(`[Circle Storage] [Address Scan Step 2] Fetching directly from root standard provider state...`);
@@ -712,8 +767,33 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
           const prov = activeProviders[i];
           if (walletAddress) break;
 
-          // A. Try direct Legacy connect method
-          if (typeof prov.connect === "function") {
+          const isLegacyConflict = typeof window !== "undefined" && (
+            prov === (window as any).petra || 
+            prov === (window as any).aptos || 
+            (prov && typeof prov.name === "string" && prov.name.toLowerCase().includes("petra"))
+          );
+
+          // A. If legacy conflict object has standard AIP-62 features, use standard features first to bypass deprecation stubs
+          if (isLegacyConflict && prov.features) {
+            const connectFeature = prov.features['standard:connect'] || prov.features['aptos:connect'];
+            if (connectFeature) {
+              try {
+                console.log(`[Circle Storage] [Legacy Conflict Resolution] Connecting legacy conflict using standard AIP-62 features...`);
+                const result = await connectFeature.connect();
+                if (result && result.accounts && Array.isArray(result.accounts) && result.accounts.length > 0) {
+                  walletAddress = result.accounts[0].address;
+                }
+                if (!walletAddress && prov.accounts && Array.isArray(prov.accounts) && prov.accounts.length > 0) {
+                  walletAddress = prov.accounts[0].address;
+                }
+              } catch (subErr) {
+                console.warn("[Circle Storage] Failed inside legacy conflict features connect:", subErr);
+              }
+            }
+          }
+
+          // B. Try direct Legacy connect method if not a conflict or if conflict did not resolve
+          if (!walletAddress && !isLegacyConflict && typeof prov.connect === "function") {
             try {
               console.log(`[Circle Storage] [Legacy Connect Stage] Triggering prov.connect() invocation...`);
               const response = await prov.connect();
@@ -738,8 +818,8 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
             }
           }
 
-          // B. Try direct Legacy account method
-          if (!walletAddress && typeof prov.account === "function") {
+          // C. Try direct Legacy account method
+          if (!walletAddress && !isLegacyConflict && typeof prov.account === "function") {
             try {
               console.log(`[Circle Storage] [Legacy Account Stage] Triggering legacy prov.account() invocation...`);
               const acc = await prov.account();
@@ -751,7 +831,7 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
             }
           }
 
-          // C. Checking standard properties directly on provider metadata
+          // D. Checking standard properties directly on provider metadata
           if (!walletAddress) {
             try {
               console.log(`[Circle Storage] [Direct Extraction Stage] Sweeping direct properties on provider instance...`);
@@ -780,6 +860,8 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
           if (cand.instance) {
             console.log(`[Circle Storage] [Rescue Candidate Probing] Probing global: "${cand.label}"`);
             try {
+              const isCandLegacyConflict = cand.label.includes("petra") || cand.label.includes("aptos") || (cand.instance && typeof cand.instance.name === "string" && cand.instance.name.toLowerCase().includes("petra"));
+
               // A. If candidate has standard AIP-62 features, connect using standard Connect
               if (cand.instance.features) {
                 try {
@@ -787,15 +869,23 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
                   if (connFeature && typeof connFeature.connect === "function") {
                     console.log(`[Circle Storage] [Rescue AIP-62 Connect] Triggering standard connect on: ${cand.label}`);
                     const connRes = await connFeature.connect();
-                    walletAddress = await probeInstanceForAddress(connRes) || await probeInstanceForAddress(cand.instance);
+                    if (connRes && connRes.accounts && Array.isArray(connRes.accounts) && connRes.accounts.length > 0) {
+                      walletAddress = connRes.accounts[0].address;
+                    }
+                    if (!walletAddress && cand.instance.accounts && Array.isArray(cand.instance.accounts) && cand.instance.accounts.length > 0) {
+                      walletAddress = cand.instance.accounts[0].address;
+                    }
+                    if (!walletAddress) {
+                      walletAddress = await probeInstanceForAddress(connRes) || await probeInstanceForAddress(cand.instance);
+                    }
                   }
                 } catch (stdErr: any) {
                   console.warn(`[Circle Storage] Standard connect failed on rescue candidate ${cand.label}:`, stdErr?.message || stdErr);
                 }
               }
 
-              // B. Try legacy connect if not standard or if standard connect did not yield address
-              if (!walletAddress && typeof cand.instance.connect === "function") {
+              // B. Try legacy connect if not standard or if standard connect did not yield address AND not a legacy conflict
+              if (!walletAddress && !isCandLegacyConflict && typeof cand.instance.connect === "function") {
                 try {
                   console.log(`[Circle Storage] [Rescue Legacy Connect] Invoking cand.instance.connect() for ${cand.label}`);
                   const connRes = await cand.instance.connect();
@@ -806,7 +896,7 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
               }
 
               // C. Check isConnected safely (wrapping in try-catch to absorb Petra DeprecatedApiError)
-              if (!walletAddress && typeof cand.instance.isConnected === "function") {
+              if (!walletAddress && !isCandLegacyConflict && typeof cand.instance.isConnected === "function") {
                 try {
                   console.log(`[Circle Storage] Checking isConnected on ${cand.label} safely...`);
                   const isConnected = await cand.instance.isConnected();
@@ -953,10 +1043,16 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
           const signFeature = provider.features?.['aptos:signAndSubmitTransaction'] || provider.features?.['standard:signAndSubmitTransaction'];
           if (signFeature) {
             console.log(`[Circle Storage] Signing transaction via AIP-62 feature on ${walletName}...`);
+            // Map keys layout to guarantee both camelCase and snake_case entry structures
+            const standardPayload = {
+              function: payload.function,
+              typeArguments: payload.typeArguments || payload.type_arguments || [],
+              arguments: payload.arguments || []
+            };
             const result = await signFeature.signAndSubmitTransaction({
-              payload: payload
+              payload: standardPayload
             });
-            return { hash: result?.hash || finalHash };
+            return { hash: result?.hash || result || finalHash };
           } 
           // 2. Try legacy signAndSubmitTransaction call
           else if (typeof provider.signAndSubmitTransaction === "function") {
