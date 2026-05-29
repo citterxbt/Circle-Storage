@@ -192,7 +192,7 @@ const getAddressString = (value: any): string | null => {
   // 2. If standard AccountAddress/PubKey class representation instance (modern Aptos TS SDK and AIP-62 standard objects)
   if (typeof value === "object") {
     // Try custom byte conversion on properties if any
-    for (const subKey of ["addressBytes", "bytes", "data"]) {
+    for (const subKey of ["addressBytes", "bytes", "data", "b", "_b", "address_bytes"]) {
       try {
         const bHex = tryConvertBytesToHexAddress(value[subKey]);
         if (bHex) return bHex;
@@ -209,7 +209,18 @@ const getAddressString = (value: any): string | null => {
       }
     } catch {}
 
-    const directKeys = ["address", "hexString", "value", "accountAddress", "walletAddress"];
+    const directKeys = [
+      "address",
+      "hexString",
+      "value",
+      "accountAddress",
+      "walletAddress",
+      "addressString",
+      "longString",
+      "publicKey",
+      "pubKey",
+      "activeAccount"
+    ];
     for (const key of directKeys) {
       try {
         const subValue = value[key];
@@ -693,6 +704,14 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
 
       if (!walletAddress) {
         console.error(`[Circle Storage] [Resolution Failure] Connection trace complete. Error: walletAddress state could not be resolved.`);
+        const isNestedFrame = typeof window !== "undefined" && window.self !== window.top;
+        if (isNestedFrame) {
+          throw new Error(
+            `A connection was established with your browser extension, but communication is restricted inside embedded preview containers.\n\n` +
+            `Under modern cross-origin privacy and security rules (such as AIP-62 standard protection), browser wallets (such as Petra) block account-sharing inside nested iFrame code editors.\n\n` +
+            `To connect your wallet securely, please click the "Open in New Tab" button in the top-right corner of this screen, and connect from there!`
+          );
+        }
         throw new Error(
           `A connection was made to the extension but we could not resolve your account's cryptographic address.\n\n` +
           `Please make sure your Petra wallet is unlocked and has at least one account created.`
