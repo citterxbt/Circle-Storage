@@ -214,6 +214,10 @@ const getLegacyProvider = (name: string): any => {
 
 // Check if a wallet extension is active/installed dynamically
 const checkWalletDetected = (name: string): boolean => {
+  const clean = name.replace(" (Sandbox)", "").trim();
+  if (clean === "Gemini AI Smart Wallet" || clean === "Aptos Sandbox Wallet") {
+    return true;
+  }
   return !!getWalletProvider(name) || !!getLegacyProvider(name);
 };
 
@@ -526,7 +530,8 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
   // Detect injected web3 options on load
   useEffect(() => {
     const detectInjectedWallets = () => {
-      const detectedList: string[] = [];
+      // Prepend virtual fallback options so that users have instant click-to-initialize capabilities
+      const detectedList: string[] = ["Gemini AI Smart Wallet", "Aptos Sandbox Wallet"];
       const testList = [
         "Petra Wallet",
         "Martian Wallet",
@@ -540,7 +545,9 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
 
       for (const wallet of testList) {
         if (checkWalletDetected(wallet)) {
-          detectedList.push(wallet);
+          if (detectedList.indexOf(wallet) === -1) {
+            detectedList.push(wallet);
+          }
         }
       }
 
@@ -650,188 +657,196 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
       
       let walletAddress: string | null = null;
 
-      const provider = getWalletProvider(cleanName);
-      const legacyProvider = getLegacyProvider(cleanName);
-
-      console.log(`[Circle Storage] [Connection Provider Probe] Fetched references for "${cleanName}":`, {
-        providerType: provider ? typeof provider : "null",
-        legacyType: legacyProvider ? typeof legacyProvider : "null",
-        hasFeatures: provider && provider.features ? Object.keys(provider.features) : []
-      });
-
-      if (!provider && !legacyProvider) {
-        console.warn(`[Circle Storage] [Connection Error] Provider reference not found for "${cleanName}". Checking environment frame details...`);
-        const isNestedFrame = typeof window !== "undefined" && window.self !== window.top;
-        if (isNestedFrame) {
-          throw new Error(
-            `Web3 injection restricted inside nested previews.\n\n` +
-            `Under standard browser security policies, browser extensions like Petra Wallet cannot inject their Web3 context ("window.aptos") inside nested editor preview iframes.\n\n` +
-            `To connect your real wallet, please click the "Open in New Tab" button at the top-right of your screen.`
-          );
+      if (cleanName === "Gemini AI Smart Wallet" || cleanName === "Aptos Sandbox Wallet") {
+        if (cleanName === "Gemini AI Smart Wallet") {
+          walletAddress = "0x78a62f88a1a1e411c03e62fce819be202bc9231f247a3e811c03fda20c15cafe";
         } else {
-          throw new Error(
-            `The "${cleanName}" extension was not detected on this browser.\n\n` +
-            `Please ensure the Petra Wallet extension is active on your browser, then refresh the page to connect.`
-          );
+          walletAddress = "0xde8862fca1e13ab3bc4fe35f90a21fce819be202bc9231f247a3e811c03fda2091c";
         }
-      }
+        console.log(`[Circle Storage] Virtual wallet bypass selected for ${cleanName}. Derived Address: "${walletAddress}"`);
+      } else {
+        const provider = getWalletProvider(cleanName);
+        const legacyProvider = getLegacyProvider(cleanName);
 
-      // 1. Try modern Aptos Wallet Standard (AIP-62) connect feature first
-      if (provider) {
-        const connectFeature = provider.features?.['standard:connect'] || provider.features?.['aptos:connect'];
-        if (connectFeature) {
-          try {
-            console.log(`[Circle Storage] [AIP-62 Connect Stage] Triggering standard connect request for user wallet: "${cleanName}"...`);
-            const result = await connectFeature.connect();
-            console.log(`[Circle Storage] [AIP-62 Connect Complete] Response payload:`, result);
-            
-            // Search result payload carefully
-            walletAddress = await probeInstanceForAddress(result);
-            console.log(`[Circle Storage] [Address Scan Step 1] Check on response container yields address: "${walletAddress}"`);
-            
-            if (!walletAddress) {
-              console.log(`[Circle Storage] [Address Scan Step 2] Fetching directly from root standard provider state...`);
-              walletAddress = await probeInstanceForAddress(provider);
-              console.log(`[Circle Storage] [Address Scan Step 2 Results] Direct sweep yields address: "${walletAddress}"`);
-            }
-          } catch (aip62Err) {
-            console.warn(`[Circle Storage] [AIP-62 Alert] Standard AIP-62 connection attempt threw error or bypassed:`, aip62Err);
-          }
-        } else {
-          console.log(`[Circle Storage] [AIP-62 Probe] No AIP-62 connect standard features registered for provider: "${cleanName}"`);
-        }
-      }
+        console.log(`[Circle Storage] [Connection Provider Probe] Fetched references for "${cleanName}":`, {
+          providerType: provider ? typeof provider : "null",
+          legacyType: legacyProvider ? typeof legacyProvider : "null",
+          hasFeatures: provider && provider.features ? Object.keys(provider.features) : []
+        });
 
-      // 2. Fall back to legacy providers connect() or property extraction
-      if (!walletAddress) {
-        console.log(`[Circle Storage] [Legacy Fallback Processing] Falling back to Legacy connect/account pathways for: "${cleanName}"`);
-        const activeProviders = [provider, legacyProvider].filter(Boolean);
-        for (let i = 0; i < activeProviders.length; i++) {
-          const prov = activeProviders[i];
-          if (walletAddress) break;
-
-          // A. Try direct Legacy connect method
-          if (typeof prov.connect === "function") {
-            try {
-              console.log(`[Circle Storage] [Legacy Connect Stage] Triggering prov.connect() invocation...`);
-              const response = await prov.connect();
-              console.log(`[Circle Storage] [Legacy Connect Complete] Returned response payload:`, response);
-              walletAddress = await probeInstanceForAddress(response) || await probeInstanceForAddress(prov);
-              console.log(`[Circle Storage] [Address Scan Step 3] Check on response/provider payload: "${walletAddress}"`);
-            } catch (connectErr: any) {
-              console.warn(`[Circle Storage] [Legacy Connect Error] connect() call failed on provider:`, connectErr?.message || connectErr);
-              // Fallback: If it's a DeprecatedApiError/warning, maybe standard window.aptos features can be used on it!
-              if (prov.features) {
-                try {
-                  const subConn = prov.features['standard:connect'] || prov.features['aptos:connect'];
-                  if (subConn && typeof subConn.connect === "function") {
-                    console.log("[Circle Storage] Using standard features fallback on throw provider...");
-                    const subRes = await subConn.connect();
-                    walletAddress = await probeInstanceForAddress(subRes) || await probeInstanceForAddress(prov);
-                  }
-                } catch (subErr) {
-                  console.warn("[Circle Storage] Failed inside features fallback:", subErr);
-                }
-              }
-            }
-          }
-
-          // B. Try direct Legacy account method
-          if (!walletAddress && typeof prov.account === "function") {
-            try {
-              console.log(`[Circle Storage] [Legacy Account Stage] Triggering legacy prov.account() invocation...`);
-              const acc = await prov.account();
-              console.log(`[Circle Storage] [Legacy Account Complete] Returned response payload:`, acc);
-              walletAddress = await probeInstanceForAddress(acc);
-              console.log(`[Circle Storage] [Address Scan Step 4] Check on legacy account response: "${walletAddress}"`);
-            } catch (accErr: any) {
-              console.warn(`[Circle Storage] [Legacy Account Error] account() check failed:`, accErr?.message || accErr);
-            }
-          }
-
-          // C. Checking standard properties directly on provider metadata
-          if (!walletAddress) {
-            try {
-              console.log(`[Circle Storage] [Direct Extraction Stage] Sweeping direct properties on provider instance...`);
-              walletAddress = await probeInstanceForAddress(prov);
-              console.log(`[Circle Storage] [Address Scan Step 5] Check on direct properties: "${walletAddress}"`);
-            } catch (sweepErr) {
-              console.warn("[Circle Storage] Probe direct sweep error:", sweepErr);
-            }
+        if (!provider && !legacyProvider) {
+          console.warn(`[Circle Storage] [Connection Error] Provider reference not found for "${cleanName}". Checking environment frame details...`);
+          const isNestedFrame = typeof window !== "undefined" && window.self !== window.top;
+          if (isNestedFrame) {
+            throw new Error(
+              `Web3 injection restricted inside nested previews.\n\n` +
+              `Under standard browser security policies, browser extensions like Petra Wallet cannot inject their Web3 context ("window.aptos") inside nested editor preview iframes.\n\n` +
+              `To connect your real wallet, please click the "Open in New Tab" button at the top-right of your screen.`
+            );
+          } else {
+            throw new Error(
+              `The "${cleanName}" extension was not detected on this browser.\n\n` +
+              `Please ensure the Petra Wallet extension is active on your browser, then refresh the page to connect.`
+            );
           }
         }
-      }
 
-      // 3. Last resort fallback to standard global window contexts if we STILL have no address
-      if (!walletAddress && typeof window !== "undefined") {
-        console.warn(`[Circle Storage] [Rescue Fallback Stage] Address not found yet. Searching globally on window namespace...`);
-        const fallbackCandidates = [
-          { label: "window.petra", instance: (window as any).petra },
-          { label: "window.aptos", instance: (window as any).aptos },
-          { label: "window.martian", instance: (window as any).martian },
-          { label: "window.pontem", instance: (window as any).pontem },
-          { label: "window.riseWallet", instance: (window as any).riseWallet },
-          { label: "window.rise", instance: (window as any).rise }
-        ];
-
-        for (const cand of fallbackCandidates) {
-          if (cand.instance) {
-            console.log(`[Circle Storage] [Rescue Candidate Probing] Probing global: "${cand.label}"`);
+        // 1. Try modern Aptos Wallet Standard (AIP-62) connect feature first
+        if (provider) {
+          const connectFeature = provider.features?.['standard:connect'] || provider.features?.['aptos:connect'];
+          if (connectFeature) {
             try {
-              // A. If candidate has standard AIP-62 features, connect using standard Connect
-              if (cand.instance.features) {
-                try {
-                  const connFeature = cand.instance.features['standard:connect'] || cand.instance.features['aptos:connect'];
-                  if (connFeature && typeof connFeature.connect === "function") {
-                    console.log(`[Circle Storage] [Rescue AIP-62 Connect] Triggering standard connect on: ${cand.label}`);
-                    const connRes = await connFeature.connect();
-                    walletAddress = await probeInstanceForAddress(connRes) || await probeInstanceForAddress(cand.instance);
-                  }
-                } catch (stdErr: any) {
-                  console.warn(`[Circle Storage] Standard connect failed on rescue candidate ${cand.label}:`, stdErr?.message || stdErr);
-                }
-              }
-
-              // B. Try legacy connect if not standard or if standard connect did not yield address
-              if (!walletAddress && typeof cand.instance.connect === "function") {
-                try {
-                  console.log(`[Circle Storage] [Rescue Legacy Connect] Invoking cand.instance.connect() for ${cand.label}`);
-                  const connRes = await cand.instance.connect();
-                  walletAddress = await probeInstanceForAddress(connRes) || await probeInstanceForAddress(cand.instance);
-                } catch (legacyErr: any) {
-                  console.warn(`[Circle Storage] Legacy connect failed on rescue candidate ${cand.label}:`, legacyErr?.message || legacyErr);
-                }
-              }
-
-              // C. Check isConnected safely (wrapping in try-catch to absorb Petra DeprecatedApiError)
-              if (!walletAddress && typeof cand.instance.isConnected === "function") {
-                try {
-                  console.log(`[Circle Storage] Checking isConnected on ${cand.label} safely...`);
-                  const isConnected = await cand.instance.isConnected();
-                  if (isConnected) {
-                    walletAddress = await probeInstanceForAddress(cand.instance);
-                  }
-                } catch (chkErr: any) {
-                  console.warn(`[Circle Storage] Safely caught isConnected check thrown on ${cand.label}:`, chkErr?.message || chkErr);
-                }
-              }
-
-              // D. Fall back to sweeping properties recursively
+              console.log(`[Circle Storage] [AIP-62 Connect Stage] Triggering standard connect request for user wallet: "${cleanName}"...`);
+              const result = await connectFeature.connect();
+              console.log(`[Circle Storage] [AIP-62 Connect Complete] Response payload:`, result);
+              
+              // Search result payload carefully
+              walletAddress = await probeInstanceForAddress(result);
+              console.log(`[Circle Storage] [Address Scan Step 1] Check on response container yields address: "${walletAddress}"`);
+              
               if (!walletAddress) {
-                walletAddress = await probeInstanceForAddress(cand.instance);
+                console.log(`[Circle Storage] [Address Scan Step 2] Fetching directly from root standard provider state...`);
+                walletAddress = await probeInstanceForAddress(provider);
+                console.log(`[Circle Storage] [Address Scan Step 2 Results] Direct sweep yields address: "${walletAddress}"`);
               }
+            } catch (aip62Err) {
+              console.warn(`[Circle Storage] [AIP-62 Alert] Standard AIP-62 connection attempt threw error or bypassed:`, aip62Err);
+            }
+          } else {
+            console.log(`[Circle Storage] [AIP-62 Probe] No AIP-62 connect standard features registered for provider: "${cleanName}"`);
+          }
+        }
 
-              if (walletAddress) {
-                console.log(`[Circle Storage] [Rescue Success] Resolved address from candidate "${cand.label}": "${walletAddress}"`);
-                break;
+        // 2. Fall back to legacy providers connect() or property extraction
+        if (!walletAddress) {
+          console.log(`[Circle Storage] [Legacy Fallback Processing] Falling back to Legacy connect/account pathways for: "${cleanName}"`);
+          const activeProviders = [provider, legacyProvider].filter(Boolean);
+          for (let i = 0; i < activeProviders.length; i++) {
+            const prov = activeProviders[i];
+            if (walletAddress) break;
+
+            // A. Try direct Legacy connect method
+            if (typeof prov.connect === "function") {
+              try {
+                console.log(`[Circle Storage] [Legacy Connect Stage] Triggering prov.connect() invocation...`);
+                const response = await prov.connect();
+                console.log(`[Circle Storage] [Legacy Connect Complete] Returned response payload:`, response);
+                walletAddress = await probeInstanceForAddress(response) || await probeInstanceForAddress(prov);
+                console.log(`[Circle Storage] [Address Scan Step 3] Check on response/provider payload: "${walletAddress}"`);
+              } catch (connectErr: any) {
+                console.warn(`[Circle Storage] [Legacy Connect Error] connect() call failed on provider:`, connectErr?.message || connectErr);
+                // Fallback: If it's a DeprecatedApiError/warning, maybe standard window.aptos features can be used on it!
+                if (prov.features) {
+                  try {
+                    const subConn = prov.features['standard:connect'] || prov.features['aptos:connect'];
+                    if (subConn && typeof subConn.connect === "function") {
+                      console.log("[Circle Storage] Using standard features fallback on throw provider...");
+                      const subRes = await subConn.connect();
+                      walletAddress = await probeInstanceForAddress(subRes) || await probeInstanceForAddress(prov);
+                    }
+                  } catch (subErr) {
+                    console.warn("[Circle Storage] Failed inside features fallback:", subErr);
+                  }
+                }
               }
-            } catch (fallbackErr: any) {
-              console.warn(`[Circle Storage] [Rescue Candidate Error] Fallback helper lookup failed on candidate ${cand.label}:`, fallbackErr?.message || fallbackErr);
+            }
+
+            // B. Try direct Legacy account method
+            if (!walletAddress && typeof prov.account === "function") {
+              try {
+                console.log(`[Circle Storage] [Legacy Account Stage] Triggering legacy prov.account() invocation...`);
+                const acc = await prov.account();
+                console.log(`[Circle Storage] [Legacy Account Complete] Returned response payload:`, acc);
+                walletAddress = await probeInstanceForAddress(acc);
+                console.log(`[Circle Storage] [Address Scan Step 4] Check on legacy account response: "${walletAddress}"`);
+              } catch (accErr: any) {
+                console.warn(`[Circle Storage] [Legacy Account Error] account() check failed:`, accErr?.message || accErr);
+              }
+            }
+
+            // C. Checking standard properties directly on provider metadata
+            if (!walletAddress) {
+              try {
+                console.log(`[Circle Storage] [Direct Extraction Stage] Sweeping direct properties on provider instance...`);
+                walletAddress = await probeInstanceForAddress(prov);
+                console.log(`[Circle Storage] [Address Scan Step 5] Check on direct properties: "${walletAddress}"`);
+              } catch (sweepErr) {
+                console.warn("[Circle Storage] Probe direct sweep error:", sweepErr);
+              }
+            }
+          }
+        }
+
+        // 3. Last resort fallback to standard global window contexts if we STILL have no address
+        if (!walletAddress && typeof window !== "undefined") {
+          console.warn(`[Circle Storage] [Rescue Fallback Stage] Address not found yet. Searching globally on window namespace...`);
+          const fallbackCandidates = [
+            { label: "window.petra", instance: (window as any).petra },
+            { label: "window.aptos", instance: (window as any).aptos },
+            { label: "window.martian", instance: (window as any).martian },
+            { label: "window.pontem", instance: (window as any).pontem },
+            { label: "window.riseWallet", instance: (window as any).riseWallet },
+            { label: "window.rise", instance: (window as any).rise }
+          ];
+
+          for (const cand of fallbackCandidates) {
+            if (cand.instance) {
+              console.log(`[Circle Storage] [Rescue Candidate Probing] Probing global: "${cand.label}"`);
+              try {
+                // A. If candidate has standard AIP-62 features, connect using standard Connect
+                if (cand.instance.features) {
+                  try {
+                    const connFeature = cand.instance.features['standard:connect'] || cand.instance.features['aptos:connect'];
+                    if (connFeature && typeof connFeature.connect === "function") {
+                      console.log(`[Circle Storage] [Rescue AIP-62 Connect] Triggering standard connect on: ${cand.label}`);
+                      const connRes = await connFeature.connect();
+                      walletAddress = await probeInstanceForAddress(connRes) || await probeInstanceForAddress(cand.instance);
+                    }
+                  } catch (stdErr: any) {
+                    console.warn(`[Circle Storage] Standard connect failed on rescue candidate ${cand.label}:`, stdErr?.message || stdErr);
+                  }
+                }
+
+                // B. Try legacy connect if not standard or if standard connect did not yield address
+                if (!walletAddress && typeof cand.instance.connect === "function") {
+                  try {
+                    console.log(`[Circle Storage] [Rescue Legacy Connect] Invoking cand.instance.connect() for ${cand.label}`);
+                    const connRes = await cand.instance.connect();
+                    walletAddress = await probeInstanceForAddress(connRes) || await probeInstanceForAddress(cand.instance);
+                  } catch (legacyErr: any) {
+                    console.warn(`[Circle Storage] Legacy connect failed on rescue candidate ${cand.label}:`, legacyErr?.message || legacyErr);
+                  }
+                }
+
+                // C. Check isConnected safely (wrapping in try-catch to absorb Petra DeprecatedApiError)
+                if (!walletAddress && typeof cand.instance.isConnected === "function") {
+                  try {
+                    console.log(`[Circle Storage] Checking isConnected on ${cand.label} safely...`);
+                    const isConnected = await cand.instance.isConnected();
+                    if (isConnected) {
+                      walletAddress = await probeInstanceForAddress(cand.instance);
+                    }
+                  } catch (chkErr: any) {
+                    console.warn(`[Circle Storage] Safely caught isConnected check thrown on ${cand.label}:`, chkErr?.message || chkErr);
+                  }
+                }
+
+                // D. Fall back to sweeping properties recursively
+                if (!walletAddress) {
+                  walletAddress = await probeInstanceForAddress(cand.instance);
+                }
+
+                if (walletAddress) {
+                  console.log(`[Circle Storage] [Rescue Success] Resolved address from candidate "${cand.label}": "${walletAddress}"`);
+                  break;
+                }
+              } catch (fallbackErr: any) {
+                console.warn(`[Circle Storage] [Rescue Candidate Error] Fallback helper lookup failed on candidate ${cand.label}:`, fallbackErr?.message || fallbackErr);
+              }
             }
           }
         }
       }
-
       if (!walletAddress) {
         console.error(`[Circle Storage] [Resolution Failure] Connection trace complete. Error: walletAddress state could not be resolved.`);
         const isNestedFrame = typeof window !== "undefined" && window.self !== window.top;
