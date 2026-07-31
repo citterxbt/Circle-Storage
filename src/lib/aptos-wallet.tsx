@@ -687,6 +687,40 @@ const EXPECTED_NETWORK_NAME = "testnet";
 /** Node API used for read-only lookups such as balances. */
 const APTOS_FULLNODE_URL = "https://fullnode.testnet.aptoslabs.com/v1";
 
+/**
+ * ShelbyUSD on Aptos testnet, as published by the fungible asset registry:
+ * name "ShelbyUSD", symbol "SHELBY_USD", 8 decimals.
+ */
+const SHELBY_USD_ASSET_TYPE =
+  "0x1b18363a9f1fe5e6ebf247daba5cc1c18052bb232efdc4c50f556053922d98e1";
+const SHELBY_USD_DECIMALS = 8;
+
+/**
+ * Call a read-only Move view and return its first return value, or null if the node refused.
+ */
+const callView = async (
+  fn: string,
+  typeArguments: string[],
+  args: unknown[]
+): Promise<string | null> => {
+  const response = await fetch(`${APTOS_FULLNODE_URL}/view`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ function: fn, type_arguments: typeArguments, arguments: args })
+  });
+
+  if (!response.ok) {
+    console.warn(
+      `[Circle Storage] View ${fn} returned HTTP ${response.status}.`,
+      await response.text().catch(() => "")
+    );
+    return null;
+  }
+
+  const [value] = await response.json();
+  return value === undefined || value === null ? null : String(value);
+};
+
 /** Read the wallet's current network across the standard and legacy shapes. */
 const readWalletNetwork = async (provider: any): Promise<{ name?: string; chainId?: number } | null> => {
   const parse = (value: any): { name?: string; chainId?: number } | null => {
@@ -985,14 +1019,7 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
       setConnected(true);
       setWalletName(savedWallet);
 
-      // The APT balance is read from chain by the effect below, so nothing is restored here.
-      const savedShelby = localStorage.getItem(`aptos_wallet_shelby_balance_${savedAddress}`);
-      if (savedShelby) {
-        setShelbyUSDBalance(parseFloat(savedShelby));
-      } else {
-        setShelbyUSDBalance(250.00);
-        localStorage.setItem(`aptos_wallet_shelby_balance_${savedAddress}`, "250.00");
-      }
+      // Both balances are read from chain by the effect below, so nothing is restored here.
     }
 
     return () => {
@@ -1005,42 +1032,45 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
   }, []);
 
   /**
-   * Read the APT balance from chain. This is the only writer of `balance`: it is never
-   * adjusted locally, so what the UI shows is what the account actually holds.
+   * Read both balances from chain. These are the only writers of `balance` and
+   * `shelbyUSDBalance`: neither is ever adjusted locally, so what the UI shows is what the
+   * account actually holds.
    *
-   * This asks the `0x1::coin::balance` view rather than looking for a
+   * APT is read through the `0x1::coin::balance` view rather than by looking for a
    * `0x1::coin::CoinStore<AptosCoin>` resource. Since APT migrated to the fungible asset
    * standard, funded accounts generally carry no CoinStore at all, so scanning resources
    * reports zero for them; the view covers both the legacy store and the migrated balance.
+   *
+   * ShelbyUSD is a fungible asset, so it is read from its primary store. Accounts that hold
+   * none answer "0" rather than failing, so an absent store needs no special case.
+   *
+   * A failed lookup leaves the previous figure in place instead of flashing a misleading zero.
    */
   const refreshOnChainBalance = async (targetAddress: string | null) => {
     if (!targetAddress) return;
 
-    try {
-      const response = await fetch(`${APTOS_FULLNODE_URL}/view`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          function: "0x1::coin::balance",
-          type_arguments: ["0x1::aptos_coin::AptosCoin"],
-          arguments: [targetAddress]
-        })
-      });
+    const [apt, shelby] = await Promise.all([
+      callView("0x1::coin::balance", ["0x1::aptos_coin::AptosCoin"], [targetAddress]).catch(
+        (error) => {
+          console.warn("[Circle Storage] Could not read the on-chain APT balance:", error);
+          return null;
+        }
+      ),
+      callView(
+        "0x1::primary_fungible_store::balance",
+        ["0x1::fungible_asset::Metadata"],
+        [targetAddress, SHELBY_USD_ASSET_TYPE]
+      ).catch((error) => {
+        console.warn("[Circle Storage] Could not read the on-chain ShelbyUSD balance:", error);
+        return null;
+      })
+    ]);
 
-      if (!response.ok) {
-        // Leave the previous figure in place rather than flashing a misleading zero.
-        console.warn(
-          `[Circle Storage] Aptos node returned HTTP ${response.status} for the APT balance.`,
-          await response.text().catch(() => "")
-        );
-        return;
-      }
-
-      // An account with no activity yet answers with "0" rather than an error.
-      const [octas] = await response.json();
-      setBalance(Number(octas || 0) / 100_000_000);
-    } catch (error) {
-      console.warn("[Circle Storage] Could not read the on-chain APT balance:", error);
+    if (apt !== null) {
+      setBalance(Number(apt) / 100_000_000);
+    }
+    if (shelby !== null) {
+      setShelbyUSDBalance(Number(shelby) / 10 ** SHELBY_USD_DECIMALS);
     }
   };
 
@@ -1351,13 +1381,8 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
       localStorage.setItem("aptos_wallet_address", walletAddress);
       localStorage.setItem("aptos_wallet_name", cleanName);
 
-      // The APT balance is whatever the chain says, so read it rather than seeding a figure.
+      // Balances are whatever the chain says, so read them rather than seeding figures.
       await refreshOnChainBalance(walletAddress);
-
-      const savedShelby = localStorage.getItem(`aptos_wallet_shelby_balance_${walletAddress}`);
-      const finalShelby = savedShelby ? parseFloat(savedShelby) : 250.00;
-      setShelbyUSDBalance(finalShelby);
-      localStorage.setItem(`aptos_wallet_shelby_balance_${walletAddress}`, finalShelby.toString());
 
       // Capture the public key while the provider is still in hand: the server needs it to
       // check that this key really controls the address we just resolved.
