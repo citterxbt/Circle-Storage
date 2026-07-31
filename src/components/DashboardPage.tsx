@@ -5,6 +5,7 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import { useAptosWallet } from "../lib/aptos-wallet";
+import { useToast } from "./Toaster";
 import { FileMetadata, DashboardStats, UserProfile } from "../types";
 import { 
   HardDrive, 
@@ -27,6 +28,7 @@ import {
 
 export default function DashboardPage() {
   const { address, connected } = useAptosWallet();
+  const toast = useToast();
   const [stats, setStats] = useState<DashboardStats>({ filesUploadedCount: 0, totalEarnings: 0 });
   const [files, setFiles] = useState<FileMetadata[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
@@ -102,7 +104,7 @@ export default function DashboardPage() {
     const file = e.target.files?.[0];
     if (file) {
       if (file.size > 1.5 * 1024 * 1024) {
-        alert("Maximum image size is 1.5MB to preserve blockchain storage limits.");
+        toast.error("Profile pictures must be 1.5 MB or smaller.");
         return;
       }
       const reader = new FileReader();
@@ -245,11 +247,11 @@ export default function DashboardPage() {
         URL.revokeObjectURL(url);
       } else {
         const errDetails = await res.json();
-        alert(errDetails.message || "Failed to download file.");
+        toast.error(errDetails.message || "Could not download the file.");
       }
     } catch (err) {
       console.error("Download failure", err);
-      alert("Encountered connection error while fetching secure file.");
+      toast.error("Lost the connection to the server while fetching the file.");
     } finally {
       setDownloadingId(null);
     }

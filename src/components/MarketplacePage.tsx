@@ -5,11 +5,13 @@
 
 import React, { useState, useEffect } from "react";
 import { useAptosWallet } from "../lib/aptos-wallet";
+import { useToast } from "./Toaster";
 import { FileMetadata } from "../types";
 import { Coins, Download, ShieldCheck, Lock, Search, RefreshCw, Layers, Calendar, User, Eye } from "lucide-react";
 
 export default function MarketplacePage() {
   const { address, connected, balance, signAndSubmitTransaction } = useAptosWallet();
+  const toast = useToast();
   const [fileList, setFileList] = useState<FileMetadata[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [search, setSearch] = useState<string>("");
@@ -50,17 +52,17 @@ export default function MarketplacePage() {
 
   const handlePurchase = async (file: FileMetadata) => {
     if (!connected || !address) {
-      alert("Please connect an Aptos wallet in the top bar before initiating purchase.");
+      toast.info("Connect an Aptos wallet in the top bar before buying.");
       return;
     }
 
     if (address.toLowerCase() === file.uploader.toLowerCase()) {
-      alert("You are the owner of this file and have default full access rights on your dashboard.");
+      toast.info("You uploaded this file — it is already available on your dashboard.");
       return;
     }
 
     if (balance < file.price) {
-      alert(`Sufficient funds required. This file requires ${file.price.toFixed(2)} APT, but your connected wallet balance is only ${balance.toFixed(2)} APT.`);
+      toast.error(`This file costs ${file.price.toFixed(2)} APT but your wallet holds ${balance.toFixed(4)} APT.`);
       return;
     }
 
@@ -95,7 +97,7 @@ export default function MarketplacePage() {
       });
 
       if (verifyRes.ok) {
-        alert("Payment verified on-chain. File content is now unlocked for you.");
+        toast.success("Payment verified on chain. The file is unlocked.");
         setOwnedFileIds((prev) => (prev.includes(file.id) ? prev : [...prev, file.id]));
         // Refresh listing so purchase counts are updated
         fetchMarketplaceFiles();
@@ -106,7 +108,7 @@ export default function MarketplacePage() {
 
     } catch (err: any) {
       console.error("Purchase payment lifecycle failed", err);
-      alert(err.message || "On-chain payment process rejected or failed verification.");
+      toast.error(err.message || "The payment was rejected or could not be verified.");
     } finally {
       setPurchasingId(null);
     }
@@ -159,11 +161,11 @@ export default function MarketplacePage() {
         URL.revokeObjectURL(url);
       } else {
         const errDetails = await res.json();
-        alert(errDetails.message || "Failed to download file.");
+        toast.error(errDetails.message || "Could not download the file.");
       }
     } catch (err) {
       console.error("Download fetch failed", err);
-      alert("Encountered server connection error while serving secure file.");
+      toast.error("Lost the connection to the server while fetching the file.");
     } finally {
       setDownloadingId(null);
     }

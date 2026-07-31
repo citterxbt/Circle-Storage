@@ -4,6 +4,7 @@
  */
 
 import React, { createContext, useContext, useState, useEffect, useRef, ReactNode } from "react";
+import { useToast } from "../components/Toaster";
 
 interface AptosWalletContextType {
   connected: boolean;
@@ -847,6 +848,7 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
   const [authenticated, setAuthenticated] = useState<boolean>(false);
   const [signingIn, setSigningIn] = useState<boolean>(false);
   const [authError, setAuthError] = useState<string | null>(null);
+  const toast = useToast();
 
   // The public key that came back with the connection, needed so the server can tie the
   // signature to the claimed address.
@@ -1436,7 +1438,8 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
       return true;
     } catch (err: any) {
       console.error(`[Circle Storage] Failed to connect to actual wallet extension ${name}:`, err);
-      alert(`Could not connect to ${name}: ${err?.message || "User declined the wallet signature request."}`);
+      setAuthError(describeError(err));
+      toast.error(`Could not connect to ${name}: ${describeError(err)}`);
       return false;
     }
   };
@@ -1546,7 +1549,7 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
   // and re-read the balance instead of inventing one.
   const requestFaucet = () => {
     if (!address) {
-      alert("Please connect your wallet first.");
+      toast.info("Connect your wallet first.");
       return;
     }
     window.open(`https://aptos.dev/network/faucet?address=${address}`, "_blank", "noopener");

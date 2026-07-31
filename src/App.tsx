@@ -11,6 +11,7 @@ import LeaderboardPage from "./components/LeaderboardPage";
 import FileUploadPage from "./components/FileUploadPage";
 import MarketplacePage from "./components/MarketplacePage";
 import PsychedelicWaterBackground from "./components/PsychedelicWaterBackground";
+import { ToastProvider } from "./components/Toaster";
 import { Coins, Menu, X, ArrowUp, Copy, Check } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -615,8 +616,11 @@ function AppContent() {
 
 export default function App() {
   return (
-    <AptosWalletProvider>
-      <AppContent />
-    </AptosWalletProvider>
+    // Outside the wallet provider so wallet errors can be reported through it too.
+    <ToastProvider>
+      <AptosWalletProvider>
+        <AppContent />
+      </AptosWalletProvider>
+    </ToastProvider>
   );
 }

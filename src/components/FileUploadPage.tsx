@@ -5,6 +5,7 @@
 
 import React, { useState, useRef } from "react";
 import { useAptosWallet } from "../lib/aptos-wallet";
+import { useToast } from "./Toaster";
 import {
   FUNGIBLE_METADATA_TYPE,
   FUNGIBLE_TRANSFER_FUNCTION,
@@ -25,6 +26,7 @@ import { Upload, HelpCircle, Shield, FileCheck, Eye, EyeOff, Coins, Zap } from "
 
 export default function FileUploadPage() {
   const { address, connected, shelbyUSDBalance, signAndSubmitTransaction } = useAptosWallet();
+  const toast = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // States
@@ -80,23 +82,23 @@ export default function FileUploadPage() {
   const handleUploadSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!connected || !address) {
-      alert("Please connect your wallet first.");
+      toast.info("Connect your wallet first.");
       return;
     }
     if (!file) {
-      alert("Please choose or drop a file to upload.");
+      toast.info("Choose or drop a file to upload.");
       return;
     }
     if (visibility === 'public' && (!price || parseFloat(price) < 0)) {
-      alert("Please specify a valid price >= 0 for public marketplace items.");
+      toast.info("Set a price of 0 or more for a public listing.");
       return;
     }
 
     const fee = calculateLeaseFee();
     if (shelbyUSDBalance < fee) {
-      alert(
-        `Sufficient balance required to lock lease. Rent requires ${fee.toFixed(4)} ${SHELBY_USD_SYMBOL}, ` +
-        `but your balance is only ${shelbyUSDBalance.toFixed(4)} ${SHELBY_USD_SYMBOL}.`
+      toast.error(
+        `This upload needs ${fee.toFixed(8)} ${SHELBY_USD_SYMBOL} but your wallet holds ` +
+        `${shelbyUSDBalance.toFixed(8)} ${SHELBY_USD_SYMBOL}.`
       );
       return;
     }
@@ -200,7 +202,7 @@ export default function FileUploadPage() {
 
     } catch (err: any) {
       console.error("Storage upload failed", err);
-      alert(err.message || "An unexpected error occurred during Shelby node dispatch.");
+      toast.error(err.message || "The upload did not complete.");
     } finally {
       setUploading(false);
       setUploadStep("");
