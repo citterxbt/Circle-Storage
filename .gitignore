@@ -6,3 +6,6 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Local JSON fallback store: runtime data, not source
+server-db.json

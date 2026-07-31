@@ -2,5 +2,5 @@
   "name": "Circle Storage",
   "description": "On-chain Web3 file storage and access-controlled file marketplace on Aptos Shelby Testnet.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": []
 }

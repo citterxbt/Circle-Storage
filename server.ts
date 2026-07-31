@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import "dotenv/config";
 import express from "express";
 import path from "path";
 import fs from "fs";
@@ -10,7 +11,7 @@ import { createServer as createViteServer } from "vite";
 import { createClient } from "@supabase/supabase-js";
 import { UserProfile, FileMetadata, PurchaseRecord, LeaderboardRow } from "./src/types";
 
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 const DB_FILE = path.join(process.cwd(), "server-db.json");
 
 // Initialize Supabase if environment variables are provided, otherwise fallback to local JSON database gracefully
