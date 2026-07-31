@@ -75,32 +75,35 @@ uploader, or listed publicly so that buyers pay in APT to unlock the download.
 
 ## Shelby storage
 
-The integration in `shelby-storage.ts` writes uploaded bytes to the Shelby network and reads
-them back on download, mapping the lease duration to the blob's on-chain expiration. It is
-inactive unless `SHELBY_ACCOUNT_PRIVATE_KEY` is set, in which case the server keeps file bytes
-itself, exactly as it falls back from Supabase to a local JSON file.
+Files live on Shelby, owned by the wallet that uploaded them. This has been exercised
+end-to-end on Aptos testnet: a 625,466-byte upload read back at the same length, with the
+contract reporting `is_written: true` and an expiration 30 days out for a `30d` lease.
 
-> [!IMPORTANT]
-> **Shelby works on Aptos testnet, but not through the SDK's `upload()`.** Reads return 200 from
-> `GET https://api.testnet.shelby.xyz/shelby/v1/blobs/<owner>/<blobName>` without any API key,
-> and `register_blob`/`register_multiple_blobs` transactions succeed on chain today.
+The flow, split between the browser and `shelby-storage.ts`:
+
+1. The browser erasure-codes the file and derives its commitments with `generateCommitments()`.
+2. The uploader's wallet signs `register_blob`, so the blob belongs to them and this server
+   holds no key. The lease duration becomes the blob's on-chain expiration.
+3. The server verifies that registration on chain, then transfers the bytes:
+   `POST /v1/multipart-uploads`, `PUT …/parts/0`, `POST …/complete`.
+4. Downloads read the bytes back with a plain `GET /v1/blobs/<owner>/<blobName>`, still gated by
+   this application's own authorisation.
+
+Bytes are not kept locally once they are on Shelby; the record holds only metadata and the blob
+name.
+
+> [!NOTE]
+> The `register_blob` payload is built by hand rather than with the SDK's helper, because no
+> published SDK version matches the contract deployed on Aptos testnet. That contract takes 7
+> arguments; `@shelby-protocol/sdk` 0.4.x builds the 8-to-10 argument form found on `shelbynet`,
+> passing `null` where testnet expects a `u64` and failing with `Type mismatch for argument 1`
+> before any network call. Versions 0.2.0 through 0.3.1 build 5. It is not a peer-version
+> problem — it reproduces on `@aptos-labs/ts-sdk` 5.2.1, 6.0.0 and 6.3.1 alike.
 >
-> What fails is the SDK's high-level upload. `register_blob` deployed at `0x85fdb9a1…` on Aptos
-> testnet takes 7 arguments, while `@shelby-protocol/sdk` 0.4.1 builds the 10-argument form
-> found on `shelbynet`, passing `null` where testnet expects a `u64`; the transaction build
-> fails with `Type mismatch for argument 1` before any network call. It is not a peer-version
-> problem — it reproduces on `@aptos-labs/ts-sdk` 5.2.1, 6.0.0 and 6.3.1 alike — and no
-> published version matches: 0.2.0 through 0.3.1 build 5 arguments, 0.4.x build 8.
->
-> The working shape on testnet, which this module does not yet use, is to orchestrate the steps
-> rather than call `upload()`:
->
-> 1. `generateCommitments()` from the SDK for the blob merkle root and chunkset count.
-> 2. Build the 7-argument `register_blob` payload directly and have it signed — a wallet can do
->    this, which would make the uploader own the blob instead of a service account.
-> 3. `POST /v1/multipart-uploads`, `PUT` the parts, then `POST /v1/multipart-uploads/{id}/complete`
->    against the Shelby RPC.
-> 4. Read back with the plain `GET` above.
+> Two details the RPC enforces, both of which cost a debugging round here: the merkle root must
+> be sent as 32 bytes rather than as its hex string, and the declared part size has a floor of
+> 1 MiB however small the file is. Registration also lands on chain slightly before the RPC
+> admits the blob exists, so opening an upload retries while it reports "not been registered".
 
 Two consequences of depending on this SDK, worth knowing before removing it:
 
@@ -108,10 +111,9 @@ Two consequences of depending on this SDK, worth knowing before removing it:
   cannot be `require`d.
 - `@aptos-labs/ts-sdk` is pinned to v6 to satisfy the SDK's peer range of `^5.2.1 || ^6.0.0`.
 
-Uploads run server-side because the SDK's `upload()` requires an `Account`, meaning a private
-key, so a browser wallet cannot drive it. The blob owner on Shelby is therefore the service
-account, not the uploader's wallet; who may read a file is still decided by this application's
-own authorisation.
+The SDK's browser build also expects Node globals, so `src/main.tsx` shims `Buffer` and
+`process`, and `vite.config.ts` keeps the erasure-coding packages out of dep pre-bundling so
+their WebAssembly still resolves beside its own asset.
 
 ## Authentication
 
@@ -136,27 +138,26 @@ src/types.ts               Shared API and domain types
 
 ## Data storage
 
-When Supabase is not configured, all state — including uploaded file payloads — is written to
-`server-db.json` in the working directory. That file is git-ignored and is not suitable for
-production: it is rewritten in full on every request, and it is lost on restart in ephemeral
-environments such as Cloud Run. Configure Supabase, or another persistent store, before
-deploying anywhere real.
+File bytes live on Shelby. What this server keeps is the metadata around them — profiles,
+listings, purchases, and each file's blob name — in Supabase when configured, otherwise in
+`server-db.json` in the working directory.
+
+That JSON file is git-ignored and is not suitable for production: it is rewritten in full on
+every request, and it is lost on restart in ephemeral environments such as Cloud Run. Configure
+Supabase, or another persistent store, before deploying anywhere real.
 
 ## Known gaps
 
-Carried over from the project handover and tracked separately:
-
-- The client-side AES-256 encryption referenced in some UI copy is not implemented. Either
-  build it or correct the copy.
-- Wallet balances and the faucet are simulated in the browser, not read from chain, so the
-  affordability checks shown in the UI are decorative.
-- The upload flow signs a call to `0x3::shelby::lock_storage_fee`, which does not exist on
-  testnet, and the AIP-62 transaction payload uses `arguments` where the standard expects
-  `functionArguments`.
-- Nothing pins the wallet's network, so a wallet left on mainnet would submit a real transfer.
+- The client-side AES-256 encryption referenced in some UI copy is not implemented. Files reach
+  Shelby as they were uploaded. Either build it or correct the copy — as it stands the interface
+  promises something it does not do.
+- Buying a file has not been exercised end-to-end with a real wallet; only uploading and
+  downloading have. It needs two accounts, since a buyer cannot be the uploader.
 - Nonces are held in process memory, so sign-in breaks across more than one replica.
 - `tsc` runs with `strict` disabled; enabling it currently surfaces around 998 errors.
 - There are no automated tests and no CI.
+- Blob names embed the owner address even though the RPC already namespaces by account, so it
+  appears twice in every URL. Harmless, but untidy.
 
 ## License
 
