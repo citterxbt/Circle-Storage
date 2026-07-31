@@ -81,19 +81,26 @@ inactive unless `SHELBY_ACCOUNT_PRIVATE_KEY` is set, in which case the server ke
 itself, exactly as it falls back from Supabase to a local JSON file.
 
 > [!IMPORTANT]
-> **Writing to Shelby does not currently work on Aptos testnet**, for two reasons outside this
-> project:
+> **Shelby works on Aptos testnet, but not through the SDK's `upload()`.** Reads return 200 from
+> `GET https://api.testnet.shelby.xyz/shelby/v1/blobs/<owner>/<blobName>` without any API key,
+> and `register_blob`/`register_multiple_blobs` transactions succeed on chain today.
 >
-> - `register_blob` deployed at `0x85fdb9a1…` on Aptos testnet takes 7 arguments, while
->   `@shelby-protocol/sdk` 0.4.1 (and the official CLI, which bundles it) builds the 10-argument
->   form found on `shelbynet`, passing `null` where testnet expects a `u64`. The build fails with
->   `Type mismatch for argument 1` before any network call. This is not a peer-version problem:
->   it reproduces on `@aptos-labs/ts-sdk` 5.2.1, 6.0.0 and 6.3.1 alike.
-> - The Shelby RPC for testnet, `https://api.testnet.shelby.xyz/shelby`, answers 404. The
->   protocol docs still list the testnet endpoints as TBD.
+> What fails is the SDK's high-level upload. `register_blob` deployed at `0x85fdb9a1…` on Aptos
+> testnet takes 7 arguments, while `@shelby-protocol/sdk` 0.4.1 builds the 10-argument form
+> found on `shelbynet`, passing `null` where testnet expects a `u64`; the transaction build
+> fails with `Type mismatch for argument 1` before any network call. It is not a peer-version
+> problem — it reproduces on `@aptos-labs/ts-sdk` 5.2.1, 6.0.0 and 6.3.1 alike — and no
+> published version matches: 0.2.0 through 0.3.1 build 5 arguments, 0.4.x build 8.
 >
-> Reads need no signer, so downloads should work as soon as an RPC is serving. Nothing here
-> needs changing when testnet catches up — set the key and it becomes active.
+> The working shape on testnet, which this module does not yet use, is to orchestrate the steps
+> rather than call `upload()`:
+>
+> 1. `generateCommitments()` from the SDK for the blob merkle root and chunkset count.
+> 2. Build the 7-argument `register_blob` payload directly and have it signed — a wallet can do
+>    this, which would make the uploader own the blob instead of a service account.
+> 3. `POST /v1/multipart-uploads`, `PUT` the parts, then `POST /v1/multipart-uploads/{id}/complete`
+>    against the Shelby RPC.
+> 4. Read back with the plain `GET` above.
 
 Two consequences of depending on this SDK, worth knowing before removing it:
 
