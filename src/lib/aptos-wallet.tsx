@@ -556,8 +556,15 @@ const findAptosAddress = (obj: any, visited = new Set<any>()): string | null => 
   return null;
 };
 
+const bytesToHex = (bytes: Iterable<number>): string =>
+  "0x" +
+  Array.from(bytes)
+    .map((b: number) => b.toString(16).padStart(2, "0"))
+    .join("");
+
 // Wallets return signatures and public keys in a handful of shapes: hex strings, byte arrays,
-// or SDK class instances. Reduce any of them to a plain "0x..." hex string.
+// or Aptos SDK class instances such as Ed25519Signature (which wraps a Hex, which wraps a
+// Uint8Array). Reduce any of them to a plain "0x..." hex string.
 const normalizeHex = (value: any): string | null => {
   if (!value) return null;
 
@@ -568,19 +575,28 @@ const normalizeHex = (value: any): string | null => {
     return null;
   }
 
-  const bytes = tryConvertBytesToHexAddress(value);
-  if (bytes) return bytes.toLowerCase();
+  if (value instanceof Uint8Array || value?.constructor?.name === "Uint8Array") {
+    return bytesToHex(value as Uint8Array);
+  }
 
   if (typeof value === "object") {
-    // Uint8Array of arbitrary length (signatures are 64 bytes, keys 32)
-    if (value instanceof Uint8Array || value?.constructor?.name === "Uint8Array") {
-      return (
-        "0x" +
-        Array.from(value as Uint8Array)
-          .map((b: number) => b.toString(16).padStart(2, "0"))
-          .join("")
-      );
+    // Ed25519Signature, Ed25519PublicKey and Hex all expose this, and it is exact.
+    if (typeof value.toUint8Array === "function") {
+      try {
+        const bytes = value.toUint8Array();
+        if (bytes && bytes.length > 0) return bytesToHex(bytes);
+      } catch {}
     }
+
+    try {
+      if (typeof value.toString === "function") {
+        const asString = value.toString();
+        if (asString && asString !== "[object Object]") {
+          const fromString = normalizeHex(asString);
+          if (fromString) return fromString;
+        }
+      }
+    } catch {}
 
     for (const key of ["data", "value", "signature", "publicKey", "key", "hexString"]) {
       try {
@@ -589,13 +605,54 @@ const normalizeHex = (value: any): string | null => {
       } catch {}
     }
 
-    try {
-      if (typeof value.toString === "function") {
-        const asString = value.toString();
-        if (asString && asString !== "[object Object]") return normalizeHex(asString);
-      }
-    } catch {}
+    if (Array.isArray(value) && value.length > 0) {
+      return normalizeHex(value[0]);
+    }
   }
+
+  return null;
+};
+
+/**
+ * Dig the account's public key out of a provider. Petra's legacy `account()` includes it, and
+ * AIP-62 providers expose it on their account objects. The server needs it to confirm the key
+ * actually controls the address being claimed.
+ */
+const resolveWalletPublicKey = async (provider: any): Promise<string | null> => {
+  if (!provider) return null;
+
+  const fromAccountObject = (account: any): string | null => {
+    if (!account) return null;
+    if (Array.isArray(account)) return fromAccountObject(account[0]);
+    return normalizeHex(account.publicKey ?? account.public_key);
+  };
+
+  try {
+    const direct = fromAccountObject(provider.accounts) || fromAccountObject(provider.account);
+    if (direct) return direct;
+  } catch {}
+
+  try {
+    const key = normalizeHex(provider.publicKey);
+    if (key) return key;
+  } catch {}
+
+  // AIP-62 account feature
+  try {
+    const feature = provider.features?.["aptos:account"];
+    if (feature && typeof feature.account === "function") {
+      const key = fromAccountObject(await feature.account());
+      if (key) return key;
+    }
+  } catch {}
+
+  // Legacy account() call
+  try {
+    if (typeof provider.account === "function") {
+      const key = fromAccountObject(await provider.account());
+      if (key) return key;
+    }
+  } catch {}
 
   return null;
 };
@@ -680,12 +737,33 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
         chainId: true
       });
 
-      const signature = normalizeHex(signed?.signature);
-      const fullMessage: string = signed?.fullMessage || signed?.full_message || "";
+      // AIP-62 wraps the result as { status, args }, while legacy providers return the fields
+      // flat. Unwrap before reading anything out of it.
+      const status = signed?.status;
+      if (typeof status === "string" && status.toLowerCase() === "rejected") {
+        throw new Error("You declined the sign-in signature request.");
+      }
+      const signedArgs = signed?.args || signed;
+
+      const signature = normalizeHex(signedArgs?.signature);
+      const fullMessage: string = signedArgs?.fullMessage || signedArgs?.full_message || "";
       const resolvedKey =
         publicKey ||
-        normalizeHex(signed?.publicKey) ||
-        normalizeHex(Array.isArray(signed?.publicKey) ? signed.publicKey[0] : null);
+        normalizeHex(signedArgs?.publicKey) ||
+        (await resolveWalletPublicKey(provider));
+
+      if (!signature || !fullMessage || !resolvedKey) {
+        // Log the actual shape so an unfamiliar wallet response can be diagnosed quickly.
+        console.error("[Circle Storage] Unusable signMessage response:", {
+          topLevelKeys: signed ? Object.keys(signed) : null,
+          argKeys: signedArgs ? Object.keys(signedArgs) : null,
+          signatureType: signedArgs?.signature?.constructor?.name,
+          haveSignature: !!signature,
+          haveFullMessage: !!fullMessage,
+          havePublicKey: !!resolvedKey,
+          raw: signed
+        });
+      }
 
       if (!signature) throw new Error("Wallet returned a signature in an unrecognised format.");
       if (!fullMessage) throw new Error("Wallet did not return the signed payload.");
@@ -1179,21 +1257,8 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
 
       // Capture the public key while the provider is still in hand: the server needs it to
       // check that this key really controls the address we just resolved.
-      publicKeyRef.current = (() => {
-        for (const candidate of [provider, legacyProvider]) {
-          if (!candidate) continue;
-          try {
-            const accounts = candidate.accounts;
-            if (Array.isArray(accounts) && accounts.length > 0) {
-              const fromAccount = normalizeHex(accounts[0]?.publicKey);
-              if (fromAccount) return fromAccount;
-            }
-            const direct = normalizeHex(candidate.publicKey);
-            if (direct) return direct;
-          } catch {}
-        }
-        return null;
-      })();
+      publicKeyRef.current =
+        (await resolveWalletPublicKey(provider)) || (await resolveWalletPublicKey(legacyProvider));
 
       // Connecting alone grants nothing server-side; the signature does.
       await establishSession(walletAddress, cleanName, publicKeyRef.current);
