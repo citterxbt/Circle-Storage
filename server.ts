@@ -24,7 +24,14 @@ import {
   verifyWalletSignature,
 } from "./auth";
 import { simulatedPaymentsAllowed, verifyAptPayment, verifyShelbyUsdPayment } from "./payments";
-import { LEASE_TREASURY_ADDRESS, isLeaseDuration, leaseFeeSmallestUnits } from "./src/shelby";
+import {
+  LEASE_TREASURY_ADDRESS,
+  buildBlobName,
+  isLeaseDuration,
+  leaseExpirationMicros,
+  leaseFeeSmallestUnits,
+} from "./src/shelby";
+import { readBlob, shelbyStorageConfigured, writeBlob } from "./shelby-storage";
 
 const PORT = Number(process.env.PORT) || 3000;
 const DB_FILE = path.join(process.cwd(), "server-db.json");
@@ -54,6 +61,8 @@ interface DatabaseSchema {
       file_data: string; // Encrypted file payload (Base64)
       content_type: string;
       lease_tx: string; // Hash of the verified ShelbyUSD lease payment
+      /** Address the Shelby blob is stored under; empty when the bytes are held locally. */
+      shelby_owner: string;
     };
   };
   purchases: PurchaseRecord[];
@@ -112,6 +121,25 @@ async function startServer() {
     }
 
     return Object.values(db.files).some(f => f.lease_tx === txHash);
+  };
+
+  /**
+   * Produce the base64 payload for a download.
+   *
+   * Records written while Shelby storage was configured hold no bytes of their own, so the
+   * blob is fetched back from the network; older records still carry their own payload.
+   */
+  const resolveFilePayload = async (
+    file: { shelby_owner?: string; shelby_ref: string; file_data?: string }
+  ): Promise<{ data?: string; reason?: string }> => {
+    if (!file.shelby_owner) {
+      return { data: file.file_data || "" };
+    }
+
+    const read = await readBlob({ owner: file.shelby_owner, blobName: file.shelby_ref });
+    if (!read.ok) return { reason: read.reason };
+
+    return { data: read.data!.toString("base64") };
   };
 
   // AUTH ROUTES
@@ -423,6 +451,33 @@ async function startServer() {
       }
     }
 
+    // Store the bytes on Shelby when a service key is configured. `shelbyRef` is the real
+    // blob name, and `storedPayload` is left empty so the file is not duplicated locally.
+    // Without a key we keep the previous behaviour and hold the bytes ourselves.
+    let shelbyRef = String(shelby_ref);
+    let shelbyOwner = "";
+    let storedPayload = String(file_data);
+
+    if (shelbyStorageConfigured()) {
+      const blobName = buildBlobName(cleanUploader, id, String(name));
+      const written = await writeBlob({
+        data: Buffer.from(storedPayload, "base64"),
+        blobName,
+        expirationMicros: leaseExpirationMicros(duration, Date.now()),
+      });
+
+      if (!written.ok) {
+        return res.status(502).json({
+          error: "SHELBY_WRITE_FAILED",
+          message: `Could not store the file on Shelby: ${written.reason}`,
+        });
+      }
+
+      shelbyRef = blobName;
+      shelbyOwner = written.owner!;
+      storedPayload = "";
+    }
+
     if (supabase) {
       try {
         // Enforce profiles seed insertion so reference constraints stay perfectly valid
@@ -447,15 +502,16 @@ async function startServer() {
           uploader: cleanUploader,
           name,
           size: actualSize,
-          shelby_ref,
+          shelby_ref: shelbyRef,
           price: visibility === "private" ? 0 : numericPrice,
           visibility,
           duration,
           created_at: new Date().toISOString(),
           aes_key: aesKey,
-          file_data,
+          file_data: storedPayload,
           content_type: content_type || "application/octet-stream",
-          lease_tx: leaseTxHash
+          lease_tx: leaseTxHash,
+          shelby_owner: shelbyOwner
         };
 
         const { error: insertError } = await supabase.from("files").insert(secureFilePayload);
@@ -464,7 +520,7 @@ async function startServer() {
           return res.status(500).json({ error: "Failed to upload file to Supabase instance." });
         }
 
-        return res.json({ id, status: "uploaded_success_registered", shelby_ref });
+        return res.json({ id, status: "uploaded_success_registered", shelby_ref: shelbyRef });
       } catch (err) {
         console.error("[Supabase DB Error] Fatal upload query loop:", err);
         return res.status(500).json({ error: "Connection error saving secure file registry." });
@@ -477,19 +533,20 @@ async function startServer() {
       uploader: cleanUploader,
       name,
       size: actualSize,
-      shelby_ref,
+      shelby_ref: shelbyRef,
       price: visibility === "private" ? 0 : numericPrice,
       visibility,
       duration,
       created_at: new Date().toISOString(),
       aes_key: aesKey,
-      file_data,
+      file_data: storedPayload,
       content_type: content_type || "application/octet-stream",
-      lease_tx: leaseTxHash
+      lease_tx: leaseTxHash,
+      shelby_owner: shelbyOwner
     };
 
     saveDatabase(db);
-    return res.json({ id, status: "uploaded_success_registered", shelby_ref });
+    return res.json({ id, status: "uploaded_success_registered", shelby_ref: shelbyRef });
   });
 
   // POST Register & Validate On-chain purchases — the buyer is the authenticated caller
@@ -693,12 +750,20 @@ async function startServer() {
           });
         }
 
-        // Access certified. Deliver AES ciphertext safely
+        // Access certified. Fetch the payload, from Shelby when that is where it lives.
+        const payload = await resolveFilePayload(targetFile);
+        if (payload.data === undefined) {
+          return res.status(502).json({
+            error: "SHELBY_READ_FAILED",
+            message: `Could not read the file back from Shelby: ${payload.reason}`
+          });
+        }
+
         return res.json({
           name: targetFile.name,
           content_type: targetFile.content_type,
           shelby_ref: targetFile.shelby_ref,
-          data: targetFile.file_data // Base64 ciphertext delivered securely
+          data: payload.data
         });
       } catch (err) {
         console.error("[Supabase DB Error] Download access resolution failed:", err);
@@ -724,11 +789,19 @@ async function startServer() {
       });
     }
 
+    const payload = await resolveFilePayload(targetFile);
+    if (payload.data === undefined) {
+      return res.status(502).json({
+        error: "SHELBY_READ_FAILED",
+        message: `Could not read the file back from Shelby: ${payload.reason}`
+      });
+    }
+
     return res.json({
       name: targetFile.name,
       content_type: targetFile.content_type,
       shelby_ref: targetFile.shelby_ref,
-      data: targetFile.file_data
+      data: payload.data
     });
   });
 

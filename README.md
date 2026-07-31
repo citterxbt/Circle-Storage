@@ -66,9 +66,45 @@ uploader, or listed publicly so that buyers pay in APT to unlock the download.
 | `SESSION_SECRET` | in production | HMAC key (32+ chars) for sign-in session cookies. In development an ephemeral key is generated, so restarts sign everyone out |
 | `APTOS_FULLNODE_URL` | no | Node API used to verify payments and account auth keys |
 | `ALLOW_SIMULATED_PAYMENTS` | no | `true` accepts purchases that fail on-chain verification, for local testing without a funded wallet. Ignored in production |
+| `SHELBY_ACCOUNT_PRIVATE_KEY` | no | Service account that owns blobs written to Shelby. Empty keeps file bytes in this server's store — see [Shelby storage](#shelby-storage) |
+| `SHELBY_NETWORK` | no | `testnet` (default), `shelbynet` or `local` |
+| `APTOS_API_KEY` | no | Aptos Labs API key, recommended to avoid rate limits |
 | `SUPABASE_URL` | no | Supabase project URL. Omit to use the local JSON store |
 | `SUPABASE_SERVICE_ROLE_KEY` | no | Supabase service-role key. Server-side only — never expose this to the client |
 | `DISABLE_HMR` | no | Set to `true` to disable Vite HMR and file watching |
+
+## Shelby storage
+
+The integration in `shelby-storage.ts` writes uploaded bytes to the Shelby network and reads
+them back on download, mapping the lease duration to the blob's on-chain expiration. It is
+inactive unless `SHELBY_ACCOUNT_PRIVATE_KEY` is set, in which case the server keeps file bytes
+itself, exactly as it falls back from Supabase to a local JSON file.
+
+> [!IMPORTANT]
+> **Writing to Shelby does not currently work on Aptos testnet**, for two reasons outside this
+> project:
+>
+> - `register_blob` deployed at `0x85fdb9a1…` on Aptos testnet takes 7 arguments, while
+>   `@shelby-protocol/sdk` 0.4.1 (and the official CLI, which bundles it) builds the 10-argument
+>   form found on `shelbynet`, passing `null` where testnet expects a `u64`. The build fails with
+>   `Type mismatch for argument 1` before any network call. This is not a peer-version problem:
+>   it reproduces on `@aptos-labs/ts-sdk` 5.2.1, 6.0.0 and 6.3.1 alike.
+> - The Shelby RPC for testnet, `https://api.testnet.shelby.xyz/shelby`, answers 404. The
+>   protocol docs still list the testnet endpoints as TBD.
+>
+> Reads need no signer, so downloads should work as soon as an RPC is serving. Nothing here
+> needs changing when testnet catches up — set the key and it becomes active.
+
+Two consequences of depending on this SDK, worth knowing before removing it:
+
+- The server bundle is ESM (`dist/server.mjs`), because `@shelby-protocol/sdk` is ESM-only and
+  cannot be `require`d.
+- `@aptos-labs/ts-sdk` is pinned to v6 to satisfy the SDK's peer range of `^5.2.1 || ^6.0.0`.
+
+Uploads run server-side because the SDK's `upload()` requires an `Account`, meaning a private
+key, so a browser wallet cannot drive it. The blob owner on Shelby is therefore the service
+account, not the uploader's wallet; who may read a file is still decided by this application's
+own authorisation.
 
 ## Authentication
 

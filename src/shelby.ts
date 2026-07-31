@@ -41,6 +41,45 @@ export const FUNGIBLE_METADATA_TYPE = "0x1::fungible_asset::Metadata";
 
 export type LeaseDuration = "7d" | "30d" | "90d" | "365d";
 
+const LEASE_DAYS: Record<LeaseDuration, number> = {
+  "7d": 7,
+  "30d": 30,
+  "90d": 90,
+  "365d": 365,
+};
+
+/**
+ * When a Shelby blob stored under this lease should expire, in microseconds since the epoch.
+ *
+ * Shelby requires every blob to carry an expiration, which is what makes the lease duration a
+ * real property of the stored object rather than a label.
+ */
+export function leaseExpirationMicros(duration: LeaseDuration, nowMs: number): number {
+  return (nowMs + LEASE_DAYS[duration] * 86_400_000) * 1000;
+}
+
+/** Shelby rejects names longer than 190 characters or ending in a slash. */
+const MAX_BLOB_NAME_LENGTH = 190;
+
+/**
+ * Build the Shelby blob name for an upload.
+ *
+ * Namespacing by uploader keeps one account's files from colliding with another's, and the
+ * file id makes each upload unique even when the same file is uploaded twice.
+ */
+export function buildBlobName(uploader: string, fileId: string, fileName: string): string {
+  const prefix = `${uploader.toLowerCase()}/${fileId}`;
+
+  // Keep the original name for legibility, but strip anything that would complicate a path.
+  const readable = fileName
+    .replace(/[^A-Za-z0-9._-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, MAX_BLOB_NAME_LENGTH - prefix.length - 1);
+
+  const name = readable ? `${prefix}/${readable}` : prefix;
+  return name.slice(0, MAX_BLOB_NAME_LENGTH).replace(/\/+$/, "");
+}
+
 /** ShelbyUSD charged per megabyte, by lease length. */
 const LEASE_COST_PER_MB: Record<LeaseDuration, number> = {
   "7d": 0.002,
