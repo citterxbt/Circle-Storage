@@ -26,21 +26,19 @@ export default function MarketplacePage() {
   const fetchMarketplaceFiles = async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/files?visibility=public");
+      const res = await fetch("/api/files");
       if (res.ok) {
         const data = await res.json();
         setFileList(data);
+      }
 
-        // If a wallet is connected, check what files the user already own by verifying previous purchases
-        if (address) {
-          const ownedList: string[] = [];
-          for (const f of data) {
-            // Test if uploader is current user
-            if (f.uploader.toLowerCase() === address.toLowerCase()) {
-              ownedList.push(f.id);
-            }
-          }
-          setOwnedFileIds(ownedList);
+      // Ask the server which files this wallet has actually paid for, so unlocked state
+      // survives a reload instead of living only in this component's memory.
+      if (address) {
+        const purchasesRes = await fetch("/api/purchases");
+        if (purchasesRes.ok) {
+          const { file_ids } = await purchasesRes.json();
+          setOwnedFileIds(Array.isArray(file_ids) ? file_ids : []);
         }
       }
     } catch (err) {
@@ -89,15 +87,13 @@ export default function MarketplacePage() {
         },
         body: JSON.stringify({
           file_id: file.id,
-          buyer: address,
-          tx_hash: result.hash,
-          amount: file.price
+          tx_hash: result.hash
         })
       });
 
       if (verifyRes.ok) {
-        alert("Payment verified on-chain. Decrypted file content is now fully unlocked for you!");
-        setOwnedFileIds((prev) => [...prev, file.id]);
+        alert("Payment verified on-chain. File content is now unlocked for you.");
+        setOwnedFileIds((prev) => (prev.includes(file.id) ? prev : [...prev, file.id]));
         // Refresh listing so purchase counts are updated
         fetchMarketplaceFiles();
       } else {
@@ -123,8 +119,7 @@ export default function MarketplacePage() {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          file_id: fileId,
-          wallet_address: address
+          file_id: fileId
         })
       });
 

@@ -63,9 +63,23 @@ uploader, or listed publicly so that buyers pay in APT to unlock the download.
 | Variable | Required | Purpose |
 | --- | --- | --- |
 | `PORT` | no | HTTP port to listen on (default `3000`) |
+| `SESSION_SECRET` | in production | HMAC key (32+ chars) for sign-in session cookies. In development an ephemeral key is generated, so restarts sign everyone out |
+| `APTOS_FULLNODE_URL` | no | Node API used to verify payments and account auth keys |
+| `ALLOW_SIMULATED_PAYMENTS` | no | `true` accepts purchases that fail on-chain verification, for local testing without a funded wallet. Ignored in production |
 | `SUPABASE_URL` | no | Supabase project URL. Omit to use the local JSON store |
 | `SUPABASE_SERVICE_ROLE_KEY` | no | Supabase service-role key. Server-side only — never expose this to the client |
 | `DISABLE_HMR` | no | Set to `true` to disable Vite HMR and file watching |
+
+## Authentication
+
+Connecting a wallet does not grant any server-side access on its own. The client asks
+`/api/auth/nonce` for a challenge, the wallet signs this application's sign-in statement, and
+`/api/auth/verify` checks the signature, confirms the signing key controls the claimed address,
+and issues an httpOnly session cookie.
+
+Every mutating route and every download derives the caller's address from that cookie. An
+address supplied in a request body is ignored, so a client cannot act on behalf of another
+wallet.
 
 ## Project layout
 
@@ -89,12 +103,16 @@ deploying anywhere real.
 
 Carried over from the project handover and tracked separately:
 
-- Server-side authorization is missing. API routes still need a wallet-signature session so
-  that request handlers derive the caller's address from a verified token.
-- On-chain payment verification needs hardening before it can be relied on.
 - The client-side AES-256 encryption referenced in some UI copy is not implemented. Either
   build it or correct the copy.
-- Wallet balances and the faucet are simulated in the browser, not read from chain.
+- Wallet balances and the faucet are simulated in the browser, not read from chain, so the
+  affordability checks shown in the UI are decorative.
+- The upload flow signs a call to `0x3::shelby::lock_storage_fee`, which does not exist on
+  testnet, and the AIP-62 transaction payload uses `arguments` where the standard expects
+  `functionArguments`.
+- Nothing pins the wallet's network, so a wallet left on mainnet would submit a real transfer.
+- Nonces are held in process memory, so sign-in breaks across more than one replica.
+- `tsc` runs with `strict` disabled; enabling it currently surfaces around 998 errors.
 - There are no automated tests and no CI.
 
 ## License

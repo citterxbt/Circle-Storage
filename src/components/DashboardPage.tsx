@@ -171,7 +171,6 @@ export default function DashboardPage() {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          wallet_address: address,
           username: editUsername.trim(),
           avatar_url: editAvatarUrl,
           bio: editBio,
@@ -209,8 +208,7 @@ export default function DashboardPage() {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          file_id: fileId,
-          wallet_address: address
+          file_id: fileId
         })
       });
 

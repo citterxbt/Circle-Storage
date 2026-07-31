@@ -124,7 +124,6 @@ export default function FileUploadPage() {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          uploader: address,
           name: file.name,
           size: file.size,
           shelby_ref: `sh_testnet_${result.hash.slice(2, 24)}`,

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { createContext, useContext, useState, useEffect, ReactNode } from "react";
+import React, { createContext, useContext, useState, useEffect, useRef, ReactNode } from "react";
 
 interface AptosWalletContextType {
   connected: boolean;
@@ -17,6 +17,14 @@ interface AptosWalletContextType {
   requestFaucet: () => void;
   availableWallets: string[];
   isDetected: (name: string) => boolean;
+  /** True once the wallet has signed the server's nonce and a session cookie is held. */
+  authenticated: boolean;
+  /** A sign-in round trip is in flight. */
+  signingIn: boolean;
+  /** Why the last sign-in attempt failed, if it did. */
+  authError: string | null;
+  /** Re-run the sign-in handshake for the connected wallet. */
+  signIn: () => Promise<boolean>;
 }
 
 const AptosWalletContext = createContext<AptosWalletContextType | undefined>(undefined);
@@ -548,6 +556,67 @@ const findAptosAddress = (obj: any, visited = new Set<any>()): string | null => 
   return null;
 };
 
+// Wallets return signatures and public keys in a handful of shapes: hex strings, byte arrays,
+// or SDK class instances. Reduce any of them to a plain "0x..." hex string.
+const normalizeHex = (value: any): string | null => {
+  if (!value) return null;
+
+  if (typeof value === "string") {
+    const clean = value.trim();
+    if (/^0x[0-9a-fA-F]+$/.test(clean)) return clean.toLowerCase();
+    if (/^[0-9a-fA-F]+$/.test(clean)) return "0x" + clean.toLowerCase();
+    return null;
+  }
+
+  const bytes = tryConvertBytesToHexAddress(value);
+  if (bytes) return bytes.toLowerCase();
+
+  if (typeof value === "object") {
+    // Uint8Array of arbitrary length (signatures are 64 bytes, keys 32)
+    if (value instanceof Uint8Array || value?.constructor?.name === "Uint8Array") {
+      return (
+        "0x" +
+        Array.from(value as Uint8Array)
+          .map((b: number) => b.toString(16).padStart(2, "0"))
+          .join("")
+      );
+    }
+
+    for (const key of ["data", "value", "signature", "publicKey", "key", "hexString"]) {
+      try {
+        const nested = normalizeHex(value[key]);
+        if (nested) return nested;
+      } catch {}
+    }
+
+    try {
+      if (typeof value.toString === "function") {
+        const asString = value.toString();
+        if (asString && asString !== "[object Object]") return normalizeHex(asString);
+      }
+    } catch {}
+  }
+
+  return null;
+};
+
+/** Locate the wallet's signMessage entry point, standard first then legacy. */
+const getSignMessageFn = (provider: any): ((input: any) => Promise<any>) | null => {
+  if (!provider) return null;
+
+  const feature =
+    provider.features?.["aptos:signMessage"] || provider.features?.["standard:signMessage"];
+  if (feature && typeof feature.signMessage === "function") {
+    return (input: any) => feature.signMessage(input);
+  }
+
+  if (typeof provider.signMessage === "function") {
+    return (input: any) => provider.signMessage(input);
+  }
+
+  return null;
+};
+
 export function AptosWalletProvider({ children }: { children: ReactNode }) {
   const [address, setAddress] = useState<string | null>(null);
   const [connected, setConnected] = useState<boolean>(false);
@@ -555,9 +624,108 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
   const [balance, setBalance] = useState<number>(0.00); 
   const [shelbyUSDBalance, setShelbyUSDBalance] = useState<number>(0.00); 
   const [availableWallets, setAvailableWallets] = useState<string[]>([]);
+  const [authenticated, setAuthenticated] = useState<boolean>(false);
+  const [signingIn, setSigningIn] = useState<boolean>(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+
+  // The public key that came back with the connection, needed so the server can tie the
+  // signature to the claimed address.
+  const publicKeyRef = useRef<string | null>(null);
 
   const isDetected = (name: string): boolean => {
     return checkWalletDetected(name);
+  };
+
+  /**
+   * Prove control of the address to the server: fetch a nonce, have the wallet sign it, and
+   * exchange the signature for a session cookie. Until this succeeds the API rejects every
+   * write and every download.
+   */
+  const establishSession = async (
+    targetAddress: string,
+    targetWalletName: string,
+    publicKey: string | null
+  ): Promise<boolean> => {
+    setSigningIn(true);
+    setAuthError(null);
+
+    try {
+      const nonceRes = await fetch("/api/auth/nonce", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ address: targetAddress })
+      });
+
+      if (!nonceRes.ok) {
+        const details = await nonceRes.json().catch(() => ({}));
+        throw new Error(details.error || "Server refused to issue a sign-in nonce.");
+      }
+
+      const { nonce, message } = await nonceRes.json();
+
+      const provider = getWalletProvider(targetWalletName) || getLegacyProvider(targetWalletName);
+      const signMessage = getSignMessageFn(provider);
+      if (!signMessage) {
+        throw new Error(
+          `${targetWalletName} does not expose a signMessage method, so ownership of the ` +
+            `address cannot be proven. Try a wallet that supports the Aptos wallet standard.`
+        );
+      }
+
+      const signed = await signMessage({
+        message,
+        nonce,
+        address: true,
+        application: true,
+        chainId: true
+      });
+
+      const signature = normalizeHex(signed?.signature);
+      const fullMessage: string = signed?.fullMessage || signed?.full_message || "";
+      const resolvedKey =
+        publicKey ||
+        normalizeHex(signed?.publicKey) ||
+        normalizeHex(Array.isArray(signed?.publicKey) ? signed.publicKey[0] : null);
+
+      if (!signature) throw new Error("Wallet returned a signature in an unrecognised format.");
+      if (!fullMessage) throw new Error("Wallet did not return the signed payload.");
+      if (!resolvedKey) throw new Error("Could not determine the wallet's public key.");
+
+      const verifyRes = await fetch("/api/auth/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          address: targetAddress,
+          publicKey: resolvedKey,
+          signature,
+          fullMessage,
+          nonce
+        })
+      });
+
+      if (!verifyRes.ok) {
+        const details = await verifyRes.json().catch(() => ({}));
+        throw new Error(details.message || "Server rejected the wallet signature.");
+      }
+
+      setAuthenticated(true);
+      return true;
+    } catch (err: any) {
+      console.error("[Circle Storage] Wallet sign-in failed:", err);
+      setAuthenticated(false);
+      setAuthError(err?.message || "Wallet sign-in failed.");
+      return false;
+    } finally {
+      setSigningIn(false);
+    }
+  };
+
+  const signIn = async (): Promise<boolean> => {
+    if (!address || !walletName) {
+      setAuthError("Connect a wallet before signing in.");
+      return false;
+    }
+    return establishSession(address, walletName, publicKeyRef.current);
   };
 
   // Detect injected web3 options on load
@@ -613,14 +781,31 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
       window.addEventListener("circle-storage-wallet-registered", detectInjectedWallets);
     }
 
-    // Retrieve previous connected wallet session
+    // Restore a previous session. The server is the authority on which address is signed in;
+    // localStorage only remembers which wallet to talk to.
     const savedAddress = localStorage.getItem("aptos_wallet_address");
     const savedWallet = localStorage.getItem("aptos_wallet_name");
+
+    fetch("/api/auth/session")
+      .then(res => (res.ok ? res.json() : null))
+      .then(session => {
+        if (session?.address) {
+          setAddress(session.address);
+          setConnected(true);
+          setAuthenticated(true);
+          if (savedWallet) setWalletName(savedWallet);
+        } else {
+          // A remembered address without a valid session is not signed in.
+          setAuthenticated(false);
+        }
+      })
+      .catch(() => setAuthenticated(false));
+
     if (savedAddress && savedWallet) {
       setAddress(savedAddress);
       setConnected(true);
       setWalletName(savedWallet);
-      
+
       const savedBalance = localStorage.getItem(`aptos_wallet_balance_${savedAddress}`);
       const savedShelby = localStorage.getItem(`aptos_wallet_shelby_balance_${savedAddress}`);
       if (savedBalance) {
@@ -991,6 +1176,28 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
 
       localStorage.setItem(`aptos_wallet_balance_${walletAddress}`, finalBal.toString());
       localStorage.setItem(`aptos_wallet_shelby_balance_${walletAddress}`, finalShelby.toString());
+
+      // Capture the public key while the provider is still in hand: the server needs it to
+      // check that this key really controls the address we just resolved.
+      publicKeyRef.current = (() => {
+        for (const candidate of [provider, legacyProvider]) {
+          if (!candidate) continue;
+          try {
+            const accounts = candidate.accounts;
+            if (Array.isArray(accounts) && accounts.length > 0) {
+              const fromAccount = normalizeHex(accounts[0]?.publicKey);
+              if (fromAccount) return fromAccount;
+            }
+            const direct = normalizeHex(candidate.publicKey);
+            if (direct) return direct;
+          } catch {}
+        }
+        return null;
+      })();
+
+      // Connecting alone grants nothing server-side; the signature does.
+      await establishSession(walletAddress, cleanName, publicKeyRef.current);
+
       return true;
     } catch (err: any) {
       console.error(`[Circle Storage] Failed to connect to actual wallet extension ${name}:`, err);
@@ -1005,8 +1212,14 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
     setWalletName(null);
     setBalance(0.00);
     setShelbyUSDBalance(0.00);
+    setAuthenticated(false);
+    setAuthError(null);
+    publicKeyRef.current = null;
     localStorage.removeItem("aptos_wallet_address");
     localStorage.removeItem("aptos_wallet_name");
+
+    // Drop the server session too, otherwise the cookie outlives the disconnect.
+    fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
   };
 
   // Sign and submit a transaction payload to testnet or generate receipt proof
@@ -1094,6 +1307,10 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
         requestFaucet,
         availableWallets,
         isDetected,
+        authenticated,
+        signingIn,
+        authError,
+        signIn,
       }}
     >
       {children}
