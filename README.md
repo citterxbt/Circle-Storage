@@ -66,9 +66,9 @@ uploader, or listed publicly so that buyers pay in APT to unlock the download.
 | `SESSION_SECRET` | in production | HMAC key (32+ chars) for sign-in session cookies. In development an ephemeral key is generated, so restarts sign everyone out |
 | `APTOS_FULLNODE_URL` | no | Node API used to verify payments and account auth keys |
 | `ALLOW_SIMULATED_PAYMENTS` | no | `true` accepts purchases that fail on-chain verification, for local testing without a funded wallet. Ignored in production |
-| `SHELBY_ACCOUNT_PRIVATE_KEY` | no | Service account that owns blobs written to Shelby. Empty keeps file bytes in this server's store — see [Shelby storage](#shelby-storage) |
-| `SHELBY_NETWORK` | no | `testnet` (default), `shelbynet` or `local` |
-| `APTOS_API_KEY` | no | Aptos Labs API key, recommended to avoid rate limits |
+| `SHELBY_API_KEY` | no | Attributes Shelby storage and egress to this project rather than an anonymous client. Works without it, but rate-limited |
+| `SHELBY_RPC_URL` | no | Shelby RPC used to transfer and read blob bytes |
+| `SHELBY_CONTRACT_ADDRESS` | no | Shelby's deployer, where blob registrations are verified |
 | `SUPABASE_URL` | no | Supabase project URL. Omit to use the local JSON store |
 | `SUPABASE_SERVICE_ROLE_KEY` | no | Supabase service-role key. Server-side only — never expose this to the client |
 | `DISABLE_HMR` | no | Set to `true` to disable Vite HMR and file watching |
