@@ -147,7 +147,7 @@ export default function LandingPage({ onEnterApp }: LandingPageProps) {
             </div>
             <h3 className="text-xl font-bold text-white font-sans">Secure IP Protection</h3>
             <p className="text-white/70 font-sans text-xs sm:text-sm leading-relaxed">
-              Maintain private archives. All private files are encrypted client-side, tied to your specific Aptos wallet signature, and are inaccessible to anyone else on the network.
+              Maintain private archives. Files are encrypted in your browser before they are uploaded, so what sits on Shelby is unreadable to anyone who fetches it — the key stays with this service and is released only to you.
             </p>
           </div>
         </div>
@@ -184,7 +184,7 @@ export default function LandingPage({ onEnterApp }: LandingPageProps) {
                 <h4 className="text-base font-bold text-white font-sans">Client Side Encrypt</h4>
                 <div className="h-[1px] w-12 bg-white/10 mx-auto my-3"></div>
                 <p className="text-xs text-white/70 leading-relaxed font-sans">
-                  Files are compressed and encrypted locally inside the web browser using symmetric AES-256 techniques prior to transit.
+                  Files are encrypted locally inside the web browser with AES-256-GCM before they leave it, so the plaintext never travels.
                 </p>
               </div>
             </div>

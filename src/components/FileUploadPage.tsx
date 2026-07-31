@@ -7,6 +7,12 @@ import React, { useState, useRef } from "react";
 import { useAptosWallet } from "../lib/aptos-wallet";
 import { useToast } from "./Toaster";
 import {
+  ENCRYPTION_ALGORITHM,
+  ENCRYPTION_KEY_BITS,
+  IV_LENGTH_BYTES,
+  bytesToHex
+} from "../encryption";
+import {
   FUNGIBLE_METADATA_TYPE,
   FUNGIBLE_TRANSFER_FUNCTION,
   LEASE_TREASURY_ADDRESS,
@@ -65,20 +71,6 @@ export default function FileUploadPage() {
     fileInputRef.current?.click();
   };
 
-  const readFileAsBase64 = (targetFile: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const result = reader.result as string;
-        // Split meta data declaration to fetch raw Base64 string payload
-        const base64Content = result.split(",")[1];
-        resolve(base64Content);
-      };
-      reader.onerror = (err) => reject(err);
-      reader.readAsDataURL(targetFile);
-    });
-  };
-
   const handleUploadSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!connected || !address) {
@@ -123,12 +115,32 @@ export default function FileUploadPage() {
       });
       console.log("Platform fee hash:", feeResult.hash);
 
-      // Step 2: Work out Shelby's commitments for the file.
+      // Step 2: Encrypt the file here, before it leaves the browser.
       //
-      // The SDK erasure-codes the bytes and derives the merkle root the contract records. This
-      // has to happen before registration, because the root is one of its arguments.
+      // Anyone can read a Shelby blob if they know its name, and the name is public on chain, so
+      // the paywall depends on the bytes being unreadable rather than on the name being secret.
+      setUploadStep("Encrypting the file with AES-256...");
+      const plainBytes = new Uint8Array(await file.arrayBuffer());
+      const key = await crypto.subtle.generateKey(
+        { name: ENCRYPTION_ALGORITHM, length: ENCRYPTION_KEY_BITS },
+        true,
+        ["encrypt"]
+      );
+      const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH_BYTES));
+      const cipherBuffer = await crypto.subtle.encrypt(
+        { name: ENCRYPTION_ALGORITHM, iv },
+        key,
+        plainBytes
+      );
+      const aesKeyHex = bytesToHex(new Uint8Array(await crypto.subtle.exportKey("raw", key)));
+      const aesIvHex = bytesToHex(iv);
+
+      // Step 3: Work out Shelby's commitments for the ciphertext.
+      //
+      // The SDK erasure-codes the bytes and derives the merkle root the contract records. It has
+      // to run on exactly the bytes that get uploaded, which is why encryption comes first.
       setUploadStep("Erasure coding the file and computing Shelby commitments...");
-      const fileBytes = new Uint8Array(await file.arrayBuffer());
+      const fileBytes = new Uint8Array(cipherBuffer);
       const {
         createDefaultErasureCodingProvider,
         defaultErasureCodingConfig,
@@ -144,7 +156,7 @@ export default function FileUploadPage() {
         erasureConfig.chunkSizeBytes * erasureConfig.erasure_k
       );
 
-      // Step 3: Register the blob on Shelby, signed by the uploader's own wallet so the blob
+      // Step 4: Register the blob on Shelby, signed by the uploader's own wallet so the blob
       // belongs to them. The payload is built here rather than with the SDK's helper, which
       // targets shelbynet's wider register_blob and would not link against testnet's.
       const blobName = buildBlobName(address, `up_${Date.now()}`, file.name);
@@ -165,10 +177,13 @@ export default function FileUploadPage() {
       });
       console.log("Shelby registration hash:", registerResult.hash);
 
-      // Step 4: Hand the bytes to the server, which transfers them to Shelby's RPC under this
+      // Step 5: Hand the ciphertext to the server, which transfers them to Shelby's RPC under this
       // project's API key and keeps no copy of its own.
       setUploadStep("Transferring the file to Shelby storage providers...");
-      const fileBase64 = await readFileAsBase64(file);
+      // The ciphertext is what Shelby stores, so that is what travels — never the plaintext.
+      let binary = "";
+      fileBytes.forEach((byte) => { binary += String.fromCharCode(byte); });
+      const fileBase64 = btoa(binary);
 
       const uploadRes = await fetch("/api/files/upload", {
         method: "POST",
@@ -185,7 +200,9 @@ export default function FileUploadPage() {
           content_type: file.type,
           lease_tx: feeResult.hash,
           blob_name: blobName,
-          register_tx: registerResult.hash
+          register_tx: registerResult.hash,
+          aes_key: aesKeyHex,
+          aes_iv: aesIvHex
         })
       });
 

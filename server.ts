@@ -32,6 +32,11 @@ import {
   leaseFeeSmallestUnits,
 } from "./src/shelby";
 import { getBlobBytes, putBlobBytes, verifyBlobRegistration } from "./shelby-storage";
+import {
+  AUTH_TAG_LENGTH_BYTES,
+  isValidIvHex,
+  isValidKeyHex,
+} from "./src/encryption";
 
 const PORT = Number(process.env.PORT) || 3000;
 const DB_FILE = path.join(process.cwd(), "server-db.json");
@@ -58,6 +63,7 @@ interface DatabaseSchema {
   files: {
     [id: string]: FileMetadata & {
       aes_key: string;
+      aes_iv: string;
       file_data: string; // Encrypted file payload (Base64)
       content_type: string;
       lease_tx: string; // Hash of the verified ShelbyUSD lease payment
@@ -130,7 +136,13 @@ async function startServer() {
    * blob is fetched back from the network; older records still carry their own payload.
    */
   const resolveFilePayload = async (
-    file: { shelby_owner?: string; shelby_ref: string; file_data?: string }
+    file: {
+      shelby_owner?: string;
+      shelby_ref: string;
+      file_data?: string;
+      aes_key?: string;
+      aes_iv?: string;
+    }
   ): Promise<{ data?: string; reason?: string }> => {
     if (!file.shelby_owner) {
       return { data: file.file_data || "" };
@@ -139,7 +151,34 @@ async function startServer() {
     const read = await getBlobBytes({ account: file.shelby_owner, blobName: file.shelby_ref });
     if (!read.ok) return { reason: read.reason };
 
-    return { data: read.data!.toString("base64") };
+    // Files uploaded before encryption was added have no key and are stored as they were.
+    if (!isValidKeyHex(file.aes_key) || !isValidIvHex(file.aes_iv)) {
+      return { data: read.data!.toString("base64") };
+    }
+
+    // The browser encrypted with AES-GCM, which appends its authentication tag to the
+    // ciphertext; Node wants that tag separately.
+    try {
+      const cipher = read.data!;
+      // An empty file encrypts to exactly the tag, so a zero-length remainder is still valid.
+      const tagAt = cipher.length - AUTH_TAG_LENGTH_BYTES;
+      if (tagAt < 0) return { reason: "Stored file is too short to be valid ciphertext." };
+
+      const decipher = crypto.createDecipheriv(
+        "aes-256-gcm",
+        Buffer.from(file.aes_key!.replace(/^0x/, ""), "hex"),
+        Buffer.from(file.aes_iv!.replace(/^0x/, ""), "hex")
+      );
+      decipher.setAuthTag(cipher.subarray(tagAt));
+
+      const plain = Buffer.concat([decipher.update(cipher.subarray(0, tagAt)), decipher.final()]);
+      return { data: plain.toString("base64") };
+    } catch (err) {
+      console.error(`[Circle Storage] Could not decrypt "${file.shelby_ref}":`, err);
+      // A failure here means the bytes or the key do not match, so returning the ciphertext
+      // would hand over something unusable and look like corruption further downstream.
+      return { reason: "The stored file could not be decrypted." };
+    }
   };
 
   // AUTH ROUTES
@@ -392,7 +431,7 @@ async function startServer() {
   app.post("/api/files/upload", requireAuth, async (req, res) => {
     const {
       name, shelby_ref, price, visibility, duration, file_data, content_type, lease_tx,
-      blob_name, register_tx
+      blob_name, register_tx, aes_key, aes_iv
     } = req.body;
 
     if (!name || !shelby_ref || !duration || !file_data) {
@@ -417,7 +456,16 @@ async function startServer() {
 
     const id = "file_" + crypto.randomUUID();
     const cleanUploader = req.walletAddress!;
-    const aesKey = "aes_key_" + Math.random().toString(36).substring(2, 15);
+    // The browser encrypts before uploading and hands over the key. Anything stored on Shelby
+    // has to arrive encrypted, or a paid file would sit there readable by the public.
+    const aesKey = String(aes_key || "");
+    const aesIv = String(aes_iv || "");
+
+    if (blob_name && (!isValidKeyHex(aesKey) || !isValidIvHex(aesIv))) {
+      return res.status(400).json({
+        error: "A Shelby upload must include the AES-256 key and nonce used to encrypt it.",
+      });
+    }
 
     // Verify the storage lease was actually paid. The fee is recomputed here from the payload
     // we received, so a client cannot declare its own price.
@@ -533,6 +581,7 @@ async function startServer() {
           duration,
           created_at: new Date().toISOString(),
           aes_key: aesKey,
+          aes_iv: aesIv,
           file_data: storedPayload,
           content_type: content_type || "application/octet-stream",
           lease_tx: leaseTxHash,
@@ -564,6 +613,7 @@ async function startServer() {
       duration,
       created_at: new Date().toISOString(),
       aes_key: aesKey,
+      aes_iv: aesIv,
       file_data: storedPayload,
       content_type: content_type || "application/octet-stream",
       lease_tx: leaseTxHash,

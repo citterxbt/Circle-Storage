@@ -616,7 +616,7 @@ export default function DashboardPage() {
                 <h3 className="text-4xl font-mono font-bold text-white tracking-tight flex items-baseline gap-2">
                   100% <span className="text-xs text-rose-400 uppercase font-bold font-sans">Gated</span>
                 </h3>
-                <p className="text-xs text-white/50 mt-2 font-sans">Decrypting keys secured server-side. Zero leaked bytes.</p>
+                <p className="text-xs text-white/50 mt-2 font-sans">Bytes on Shelby are encrypted; their keys are held here and released only to you or a verified buyer.</p>
               </div>
             </div>
           </div>
