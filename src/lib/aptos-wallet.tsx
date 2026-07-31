@@ -657,6 +657,107 @@ const resolveWalletPublicKey = async (provider: any): Promise<string | null> => 
   return null;
 };
 
+/**
+ * Pull the transaction hash out of a submit response. AIP-62 wraps it as { status, args },
+ * legacy providers return it flat, and some return the hash as a bare string.
+ */
+const readTransactionHash = (result: any): string | null => {
+  if (!result) return null;
+
+  if (typeof result === "string") {
+    return /^0x[0-9a-fA-F]{1,64}$/.test(result.trim()) ? result.trim() : null;
+  }
+
+  const status = result.status;
+  if (typeof status === "string" && status.toLowerCase() === "rejected") return null;
+
+  const body = result.args || result;
+  for (const key of ["hash", "transactionHash", "txnHash", "tx_hash"]) {
+    const candidate = body?.[key];
+    if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+  }
+
+  return null;
+};
+
+/** The network this app is built against. Signing anywhere else is refused. */
+const EXPECTED_CHAIN_ID = 2; // Aptos testnet
+const EXPECTED_NETWORK_NAME = "testnet";
+
+/** Node API used for read-only lookups such as balances. */
+const APTOS_FULLNODE_URL = "https://fullnode.testnet.aptoslabs.com/v1";
+
+/** Read the wallet's current network across the standard and legacy shapes. */
+const readWalletNetwork = async (provider: any): Promise<{ name?: string; chainId?: number } | null> => {
+  const parse = (value: any): { name?: string; chainId?: number } | null => {
+    if (!value) return null;
+    if (typeof value === "string") return { name: value.toLowerCase() };
+    const name = typeof value.name === "string" ? value.name.toLowerCase() : undefined;
+    const rawChain = value.chainId ?? value.chain_id;
+    const chainId = rawChain === undefined || rawChain === null ? undefined : Number(rawChain);
+    if (name === undefined && chainId === undefined) return null;
+    return { name, chainId };
+  };
+
+  const feature = provider?.features?.["aptos:network"] || provider?.features?.["aptos:getNetwork"];
+  if (feature) {
+    for (const fn of [feature.network, feature.getNetwork]) {
+      if (typeof fn === "function") {
+        try {
+          const parsed = parse(await fn.call(feature));
+          if (parsed) return parsed;
+        } catch {}
+      }
+    }
+  }
+
+  for (const fnName of ["network", "getNetwork"]) {
+    try {
+      if (typeof provider?.[fnName] === "function") {
+        const parsed = parse(await provider[fnName]());
+        if (parsed) return parsed;
+      }
+    } catch {}
+  }
+
+  try {
+    const parsed = parse(provider?.network);
+    if (parsed) return parsed;
+  } catch {}
+
+  return null;
+};
+
+/**
+ * Throw unless the wallet is on the expected network.
+ *
+ * When the network cannot be read at all we proceed with a warning rather than blocking, since
+ * not every provider exposes it — meaning this guard reduces the risk of a mainnet transfer
+ * but cannot rule it out for wallets that stay silent about their network.
+ */
+const assertExpectedNetwork = async (provider: any): Promise<void> => {
+  const network = await readWalletNetwork(provider);
+
+  if (!network) {
+    console.warn(
+      "[Circle Storage] Wallet did not report its network; proceeding without a network check."
+    );
+    return;
+  }
+
+  const nameMatches = network.name ? network.name.includes(EXPECTED_NETWORK_NAME) : undefined;
+  const chainMatches =
+    network.chainId === undefined ? undefined : network.chainId === EXPECTED_CHAIN_ID;
+
+  if (nameMatches === false || chainMatches === false) {
+    const reported = network.name || `chain ${network.chainId}`;
+    throw new Error(
+      `Your wallet is connected to ${reported}, but Circle Storage runs on Aptos testnet. ` +
+        `Switch the network in your wallet before signing, otherwise you could move real funds.`
+    );
+  }
+};
+
 /** Locate the wallet's signMessage entry point, standard first then legacy. */
 const getSignMessageFn = (provider: any): ((input: any) => Promise<any>) | null => {
   if (!provider) return null;
@@ -884,13 +985,8 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
       setConnected(true);
       setWalletName(savedWallet);
 
-      const savedBalance = localStorage.getItem(`aptos_wallet_balance_${savedAddress}`);
+      // The APT balance is read from chain by the effect below, so nothing is restored here.
       const savedShelby = localStorage.getItem(`aptos_wallet_shelby_balance_${savedAddress}`);
-      if (savedBalance) {
-        setBalance(parseFloat(savedBalance));
-      } else {
-        setBalance(0.00);
-      }
       if (savedShelby) {
         setShelbyUSDBalance(parseFloat(savedShelby));
       } else {
@@ -908,37 +1004,44 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  // Sync real-time testnet balances when a live Web3 wallet is connected
+  /**
+   * Read the APT balance from chain. This is the only writer of `balance`: it is never
+   * adjusted locally, so what the UI shows is what the account actually holds.
+   */
+  const refreshOnChainBalance = async (targetAddress: string | null) => {
+    if (!targetAddress) return;
+
+    try {
+      const response = await fetch(
+        `${APTOS_FULLNODE_URL}/accounts/${targetAddress}/resources`
+      );
+
+      // An address with no on-chain activity yet simply has no resources.
+      if (response.status === 404) {
+        setBalance(0.0);
+        return;
+      }
+
+      if (!response.ok) {
+        console.warn(`[Circle Storage] Aptos node returned HTTP ${response.status} for balance.`);
+        return;
+      }
+
+      const resources = await response.json();
+      const coinStore = resources.find(
+        (res: any) => res.type === "0x1::coin::CoinStore<0x1::aptos_coin::AptosCoin>"
+      );
+      const octas = coinStore?.data?.coin?.value;
+      setBalance(octas ? Number(octas) / 100_000_000 : 0.0);
+    } catch (error) {
+      console.warn("[Circle Storage] Could not read the on-chain APT balance:", error);
+    }
+  };
+
+  // Keep the displayed balance in step with the connected account
   useEffect(() => {
     if (connected && address) {
-      const fetchOnChainBalances = async () => {
-        try {
-          // Query Aptos Testnet Node API for true APT CoinStore resources
-          const response = await fetch(`https://fullnode.testnet.aptoslabs.com/v1/accounts/${address}/resources`);
-          if (response.ok) {
-            const resources = await response.json();
-            const coinStore = resources.find(
-              (res: any) => res.type === "0x1::coin::CoinStore<0x1::aptos_coin::AptosCoin>"
-            );
-            if (coinStore && coinStore.data && coinStore.data.coin) {
-              const octas = parseFloat(coinStore.data.coin.value);
-              const actualApt = octas / 100_000_000; // 10^8 Octas = 1 APT
-              setBalance(actualApt);
-              localStorage.setItem(`aptos_wallet_balance_${address}`, actualApt.toString());
-            } else {
-              setBalance(0.00);
-              localStorage.setItem(`aptos_wallet_balance_${address}`, "0");
-            }
-          } else if (response.status === 404) {
-            setBalance(0.00);
-            localStorage.setItem(`aptos_wallet_balance_${address}`, "0");
-          }
-        } catch (error) {
-          console.warn("[Circle Storage] Could not fetch real on-chain balance from Aptos Testnet node:", error);
-        }
-      };
-      
-      fetchOnChainBalances();
+      refreshOnChainBalance(address);
     } else {
       setBalance(0.00);
       setShelbyUSDBalance(0.00);
@@ -1242,17 +1345,12 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
       localStorage.setItem("aptos_wallet_address", walletAddress);
       localStorage.setItem("aptos_wallet_name", cleanName);
 
-      // Load balances safely
-      const savedBalance = localStorage.getItem(`aptos_wallet_balance_${walletAddress}`);
+      // The APT balance is whatever the chain says, so read it rather than seeding a figure.
+      await refreshOnChainBalance(walletAddress);
+
       const savedShelby = localStorage.getItem(`aptos_wallet_shelby_balance_${walletAddress}`);
-
-      const finalBal = savedBalance ? parseFloat(savedBalance) : 10.0;
       const finalShelby = savedShelby ? parseFloat(savedShelby) : 250.00;
-
-      setBalance(finalBal);
       setShelbyUSDBalance(finalShelby);
-
-      localStorage.setItem(`aptos_wallet_balance_${walletAddress}`, finalBal.toString());
       localStorage.setItem(`aptos_wallet_shelby_balance_${walletAddress}`, finalShelby.toString());
 
       // Capture the public key while the provider is still in hand: the server needs it to
@@ -1287,75 +1385,97 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
     fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
   };
 
-  // Sign and submit a transaction payload to testnet or generate receipt proof
+  // Submit a transaction through the connected wallet. There is no fallback: if the wallet
+  // cannot or will not sign, this throws, because a fabricated hash would be indistinguishable
+  // from a real receipt to anything downstream.
   const signAndSubmitTransaction = async (payload: any): Promise<{ hash: string }> => {
     console.log("[Circle Storage] Submitting transaction payload to extension:", payload);
-    
+
     if (!address) {
       throw new Error("No connected wallet found for signing transaction.");
     }
+    if (!walletName) {
+      throw new Error("No wallet is connected to sign this transaction.");
+    }
 
-    // Check if the buyer has sufficient balance
     if (payload.amount && balance < payload.amount) {
-      throw new Error(`Insufficient funds: transaction needs ${payload.amount} APT, but wallet balance is ${balance.toFixed(2)} APT.`);
+      throw new Error(
+        `Insufficient funds: transaction needs ${payload.amount} APT, but the wallet holds ${balance.toFixed(4)} APT.`
+      );
     }
 
-    // Deduct standard pricing
-    if (payload.amount) {
-      const newBal = Math.max(0, balance - payload.amount);
-      setBalance(newBal);
-      localStorage.setItem(`aptos_wallet_balance_${address}`, newBal.toString());
+    const provider = getWalletProvider(walletName) || getLegacyProvider(walletName);
+    if (!provider) {
+      throw new Error(`Lost the connection to ${walletName}. Reconnect the wallet and retry.`);
     }
 
-    // Generate fall-back/standard random seed receipt hash
-    const array = new Uint8Array(32);
-    crypto.getRandomValues(array);
-    const hex = Array.from(array, byte => byte.toString(16).padStart(2, "0")).join("");
-    const finalHash = "0x" + hex;
-    
-    if (walletName) {
-      try {
-        const provider = getWalletProvider(walletName);
-        if (provider) {
-          // 1. Try Aptos Wallet Standard (AIP-62) signAndSubmitTransaction
-          const signFeature = provider.features?.['aptos:signAndSubmitTransaction'] || provider.features?.['standard:signAndSubmitTransaction'];
-          if (signFeature) {
-            console.log(`[Circle Storage] Signing transaction via AIP-62 feature on ${walletName}...`);
-            // Map keys layout to guarantee both camelCase and snake_case entry structures
-            const standardPayload = {
-              function: payload.function,
-              typeArguments: payload.typeArguments || payload.type_arguments || [],
-              arguments: payload.arguments || []
-            };
-            const result = await signFeature.signAndSubmitTransaction({
-              payload: standardPayload
-            });
-            return { hash: result?.hash || result || finalHash };
-          } 
-          // 2. Try legacy signAndSubmitTransaction call
-          else if (typeof provider.signAndSubmitTransaction === "function") {
-            console.log(`[Circle Storage] Signing transaction via legacy API on ${walletName}...`);
-            const result = await provider.signAndSubmitTransaction(payload);
-            return { hash: result?.hash || result || finalHash };
+    // Refuse to sign anywhere but the network this app targets, so a wallet left on mainnet
+    // cannot move real funds.
+    await assertExpectedNetwork(provider);
+
+    try {
+      // 1. Aptos Wallet Standard (AIP-62). The standard names the field functionArguments;
+      // sending `arguments` leaves the wallet with no arguments to encode.
+      const signFeature =
+        provider.features?.["aptos:signAndSubmitTransaction"] ||
+        provider.features?.["standard:signAndSubmitTransaction"];
+
+      if (signFeature) {
+        console.log(`[Circle Storage] Signing transaction via AIP-62 feature on ${walletName}...`);
+        const args = payload.functionArguments || payload.arguments || [];
+        const typeArguments = payload.typeArguments || payload.type_arguments || [];
+        const result = await signFeature.signAndSubmitTransaction({
+          payload: {
+            function: payload.function,
+            typeArguments,
+            functionArguments: args
           }
+        });
+
+        const hash = readTransactionHash(result);
+        if (!hash) {
+          console.error("[Circle Storage] Unusable signAndSubmitTransaction response:", result);
+          throw new Error("Wallet did not return a transaction hash.");
         }
-      } catch (err: any) {
-        console.warn("[Circle Storage] Direct extension transaction submission failed or declined:", err);
-        throw new Error(err?.message || "Aptos transaction signing rejected by user.");
+        await refreshOnChainBalance(address);
+        return { hash };
       }
+
+      // 2. Legacy providers take the original entry_function_payload shape.
+      if (typeof provider.signAndSubmitTransaction === "function") {
+        console.log(`[Circle Storage] Signing transaction via legacy API on ${walletName}...`);
+        const result = await provider.signAndSubmitTransaction({
+          type: "entry_function_payload",
+          function: payload.function,
+          type_arguments: payload.typeArguments || payload.type_arguments || [],
+          arguments: payload.functionArguments || payload.arguments || []
+        });
+
+        const hash = readTransactionHash(result);
+        if (!hash) {
+          console.error("[Circle Storage] Unusable legacy transaction response:", result);
+          throw new Error("Wallet did not return a transaction hash.");
+        }
+        await refreshOnChainBalance(address);
+        return { hash };
+      }
+    } catch (err: any) {
+      console.warn("[Circle Storage] Transaction submission failed or was declined:", err);
+      throw new Error(err?.message || "The wallet rejected this transaction.");
     }
 
-    return { hash: `0x_mock_tx_${hex.slice(0, 32)}` };
+    throw new Error(`${walletName} does not expose a way to submit transactions.`);
   };
 
+  // Balances come from chain, so there is nothing local to top up. Point at the real faucet
+  // and re-read the balance instead of inventing one.
   const requestFaucet = () => {
     if (!address) {
       alert("Please connect your wallet first.");
       return;
     }
-    const newBal = balance + 5.0;
-    setBalance(newBal);
-    localStorage.setItem(`aptos_wallet_balance_${address}`, newBal.toString());
+    window.open(`https://aptos.dev/network/faucet?address=${address}`, "_blank", "noopener");
+    refreshOnChainBalance(address);
   };
 
   return (
