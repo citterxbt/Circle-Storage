@@ -52,6 +52,31 @@ export const REGISTER_BLOB_FUNCTION = `${SHELBY_DEPLOYER}::blob_metadata::regist
 export const SHELBY_PAYMENT_TIER = 0;
 
 /**
+ * Convert the SDK's merkle root into the bytes `register_blob` expects.
+ *
+ * The SDK hands back a hex string. Passing that straight through as the `vector<u8>` argument
+ * makes the wallet encode its 66 characters as 66 bytes, and the contract rejects it with "the
+ * blob commitment length is invalid (must be exactly 32 bytes)". Decode it instead, and fail
+ * here rather than at signing time if it is ever not 32 bytes.
+ */
+export function blobCommitmentBytes(merkleRootHex: string): Uint8Array {
+  const clean = String(merkleRootHex).replace(/^0x/, "");
+
+  if (!/^[0-9a-fA-F]{64}$/.test(clean)) {
+    throw new Error(
+      `Blob commitment must be 32 bytes of hex, but got ${clean.length / 2} bytes ` +
+        `("${String(merkleRootHex).slice(0, 24)}…").`
+    );
+  }
+
+  const bytes = new Uint8Array(32);
+  for (let i = 0; i < 32; i += 1) {
+    bytes[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
+  }
+  return bytes;
+}
+
+/**
  * Registering a blob costs far more gas than a plain transfer, and the default ceiling is not
  * always enough — an under-funded registration aborts with "Out of gas" after the fee is spent.
  */

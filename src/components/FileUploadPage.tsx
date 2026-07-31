@@ -14,6 +14,7 @@ import {
   SHELBY_PAYMENT_TIER,
   SHELBY_USD_ASSET_TYPE,
   SHELBY_USD_SYMBOL,
+  blobCommitmentBytes,
   buildBlobName,
   leaseExpirationMicros,
   leaseFee,
@@ -152,7 +153,7 @@ export default function FileUploadPage() {
         functionArguments: [
           blobName,
           String(leaseExpirationMicros(duration, Date.now())),
-          commitments.blob_merkle_root,
+          blobCommitmentBytes(commitments.blob_merkle_root),
           numChunksets,
           String(fileBytes.length),
           SHELBY_PAYMENT_TIER,
