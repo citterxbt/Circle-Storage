@@ -792,6 +792,34 @@ const assertExpectedNetwork = async (provider: any): Promise<void> => {
   }
 };
 
+/**
+ * Turn whatever a wallet or the network threw into something a user can act on.
+ *
+ * Wallets reject with plain objects, numeric codes, or strings as often as with real Errors, so
+ * `err.message` is frequently empty — and reporting "sign-in failed" with no reason hides the
+ * one detail needed to fix it.
+ */
+const describeError = (err: any): string => {
+  if (!err) return "Wallet sign-in failed for an unknown reason.";
+  if (typeof err === "string") return err;
+
+  if (err.message) {
+    // Petra reports a declined request as code 4001.
+    return err.code ? `${err.message} (code ${err.code})` : String(err.message);
+  }
+
+  if (err.code === 4001) return "You declined the signature request in your wallet.";
+  if (err.code) return `Wallet returned error code ${err.code}.`;
+  if (err.name) return `Wallet sign-in failed: ${err.name}.`;
+
+  try {
+    const asJson = JSON.stringify(err);
+    if (asJson && asJson !== "{}") return `Wallet sign-in failed: ${asJson.slice(0, 200)}`;
+  } catch {}
+
+  return "Wallet sign-in failed and the wallet gave no reason. See the browser console.";
+};
+
 /** Locate the wallet's signMessage entry point, standard first then legacy. */
 const getSignMessageFn = (provider: any): ((input: any) => Promise<any>) | null => {
   if (!provider) return null;
@@ -926,7 +954,7 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
     } catch (err: any) {
       console.error("[Circle Storage] Wallet sign-in failed:", err);
       setAuthenticated(false);
-      setAuthError(err?.message || "Wallet sign-in failed.");
+      setAuthError(describeError(err));
       return false;
     } finally {
       setSigningIn(false);
@@ -934,11 +962,24 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
   };
 
   const signIn = async (): Promise<boolean> => {
-    if (!address || !walletName) {
+    if (!walletName) {
       setAuthError("Connect a wallet before signing in.");
       return false;
     }
-    return establishSession(address, walletName, publicKeyRef.current);
+
+    // A reload restores the remembered address but not the wallet connection, so the provider
+    // has no account to sign with and no public key to offer. Reconnect in that case rather
+    // than failing — otherwise the only way through is to disconnect and start again, which
+    // nobody should have to work out for themselves.
+    const provider = getWalletProvider(walletName) || getLegacyProvider(walletName);
+    const key = publicKeyRef.current || (await resolveWalletPublicKey(provider));
+
+    if (!address || !key) {
+      return connect(walletName);
+    }
+
+    publicKeyRef.current = key;
+    return establishSession(address, walletName, key);
   };
 
   // Detect injected web3 options on load
