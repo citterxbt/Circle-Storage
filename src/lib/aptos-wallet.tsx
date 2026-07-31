@@ -1007,32 +1007,38 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
   /**
    * Read the APT balance from chain. This is the only writer of `balance`: it is never
    * adjusted locally, so what the UI shows is what the account actually holds.
+   *
+   * This asks the `0x1::coin::balance` view rather than looking for a
+   * `0x1::coin::CoinStore<AptosCoin>` resource. Since APT migrated to the fungible asset
+   * standard, funded accounts generally carry no CoinStore at all, so scanning resources
+   * reports zero for them; the view covers both the legacy store and the migrated balance.
    */
   const refreshOnChainBalance = async (targetAddress: string | null) => {
     if (!targetAddress) return;
 
     try {
-      const response = await fetch(
-        `${APTOS_FULLNODE_URL}/accounts/${targetAddress}/resources`
-      );
-
-      // An address with no on-chain activity yet simply has no resources.
-      if (response.status === 404) {
-        setBalance(0.0);
-        return;
-      }
+      const response = await fetch(`${APTOS_FULLNODE_URL}/view`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          function: "0x1::coin::balance",
+          type_arguments: ["0x1::aptos_coin::AptosCoin"],
+          arguments: [targetAddress]
+        })
+      });
 
       if (!response.ok) {
-        console.warn(`[Circle Storage] Aptos node returned HTTP ${response.status} for balance.`);
+        // Leave the previous figure in place rather than flashing a misleading zero.
+        console.warn(
+          `[Circle Storage] Aptos node returned HTTP ${response.status} for the APT balance.`,
+          await response.text().catch(() => "")
+        );
         return;
       }
 
-      const resources = await response.json();
-      const coinStore = resources.find(
-        (res: any) => res.type === "0x1::coin::CoinStore<0x1::aptos_coin::AptosCoin>"
-      );
-      const octas = coinStore?.data?.coin?.value;
-      setBalance(octas ? Number(octas) / 100_000_000 : 0.0);
+      // An account with no activity yet answers with "0" rather than an error.
+      const [octas] = await response.json();
+      setBalance(Number(octas || 0) / 100_000_000);
     } catch (error) {
       console.warn("[Circle Storage] Could not read the on-chain APT balance:", error);
     }
