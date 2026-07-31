@@ -821,6 +821,16 @@ const describeError = (err: any): string => {
   return "Wallet sign-in failed and the wallet gave no reason. See the browser console.";
 };
 
+/** Compare two Aptos addresses, which may be written with different zero padding. */
+const sameAddress = (a: string, b: string): boolean => {
+  const normalize = (value: string) =>
+    value.trim().toLowerCase().replace(/^0x/, "").padStart(64, "0");
+  return normalize(a) === normalize(b);
+};
+
+const truncate = (address: string): string =>
+  address.length > 12 ? `${address.slice(0, 6)}…${address.slice(-4)}` : address;
+
 /** Locate the wallet's signMessage entry point, standard first then legacy. */
 const getSignMessageFn = (provider: any): ((input: any) => Promise<any>) | null => {
   if (!provider) return null;
@@ -963,6 +973,52 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  /**
+   * Adopt the account the wallet has switched to.
+   *
+   * The old session belongs to the previous address, so it is dropped rather than left to fail
+   * server-side checks later. The user signs in again, deliberately, as whoever they now are.
+   */
+  const handleAccountChange = async (newAddress: string) => {
+    if (address && sameAddress(newAddress, address)) return;
+
+    console.log(`[Circle Storage] Wallet switched account to ${newAddress}`);
+    setAddress(newAddress);
+    setAuthenticated(false);
+    setAuthError(null);
+    publicKeyRef.current = null;
+    localStorage.setItem("aptos_wallet_address", newAddress);
+
+    await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+    toast.info(`Wallet switched to ${truncate(newAddress)}. Sign in again to continue.`);
+  };
+
+  // Follow the wallet's own account switches, so the app does not keep acting as an account the
+  // user has moved away from.
+  useEffect(() => {
+    if (!walletName) return;
+
+    const provider = getWalletProvider(walletName) || getLegacyProvider(walletName);
+    const feature = provider?.features?.["aptos:onAccountChange"];
+    if (!feature || typeof feature.onAccountChange !== "function") return;
+
+    let unsubscribe: (() => void) | undefined;
+    try {
+      unsubscribe = feature.onAccountChange(async (account: any) => {
+        const next = extractAddress(account) || (await probeInstanceForAddress(account));
+        if (next) await handleAccountChange(next);
+      });
+    } catch (err) {
+      console.warn("[Circle Storage] Could not subscribe to wallet account changes:", err);
+    }
+
+    return () => {
+      try {
+        unsubscribe?.();
+      } catch {}
+    };
+  }, [walletName, address]);
+
   const signIn = async (): Promise<boolean> => {
     if (!walletName) {
       setAuthError("Connect a wallet before signing in.");
@@ -978,6 +1034,22 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
 
     if (!address || !key) {
       return connect(walletName);
+    }
+
+    // Sign in as whoever the wallet currently is. If it has switched accounts since we last
+    // looked, signing with the remembered address would produce a payload naming a different
+    // one, which the server refuses — so adopt the active account instead of failing.
+    const activeAddress = await probeInstanceForAddress(provider);
+    if (activeAddress && !sameAddress(activeAddress, address)) {
+      console.log(
+        `[Circle Storage] Signing in as the wallet's current account ${activeAddress}, ` +
+          `not the remembered ${address}`
+      );
+      setAddress(activeAddress);
+      localStorage.setItem("aptos_wallet_address", activeAddress);
+      const activeKey = (await resolveWalletPublicKey(provider)) || key;
+      publicKeyRef.current = activeKey;
+      return establishSession(activeAddress, walletName, activeKey);
     }
 
     publicKeyRef.current = key;
@@ -1487,6 +1559,18 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
     // Refuse to sign anywhere but the network this app targets, so a wallet left on mainnet
     // cannot move real funds.
     await assertExpectedNetwork(provider);
+
+    // The wallet signs with whichever account it currently has selected. If that is no longer
+    // the one this session belongs to, the server rightly rejects the result — as "transaction
+    // was not sent by the paying wallet" — after the user has already paid gas. Catch it first.
+    const activeAddress = await probeInstanceForAddress(provider);
+    if (activeAddress && !sameAddress(activeAddress, address)) {
+      await handleAccountChange(activeAddress);
+      throw new Error(
+        `Your wallet has switched to ${truncate(activeAddress)}, but this session belongs to ` +
+          `${truncate(address)}. Sign in again with the account you want to use.`
+      );
+    }
 
     try {
       // 1. Aptos Wallet Standard (AIP-62). The standard names the field functionArguments;
