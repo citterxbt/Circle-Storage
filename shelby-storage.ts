@@ -37,6 +37,28 @@ const START_TIMEOUT_MS = 60_000;
 const PART_TIMEOUT_MS = 120_000;
 const COMPLETE_TIMEOUT_MS = 180_000;
 
+/** The RPC rejects a declared part size below this, however small the file is. */
+const MIN_PART_SIZE_BYTES = 1_048_576;
+
+/**
+ * Registration lands on chain slightly before the RPC will admit the blob exists, so the first
+ * attempt to open an upload often fails with "not been registered". Retry through these delays
+ * rather than surfacing that as a failure.
+ */
+const START_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000];
+const COMPLETE_RETRY_DELAYS_MS = [2_000, 4_000, 8_000, 12_000, 16_000];
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Worth another attempt: the blob is not visible yet, we are throttled, or the RPC faltered. */
+function isRecoverable(status: number, body: string): boolean {
+  return (
+    status === 429 ||
+    status >= 500 ||
+    /not been registered|rate limit|temporarily|try again/i.test(body)
+  );
+}
+
 /** Blob names carry path structure, so keep the slashes and escape only the segments. */
 function blobUrl(account: string, blobName: string): string {
   const encoded = blobName
@@ -108,26 +130,49 @@ export async function putBlobBytes(params: {
     );
   }
 
-  try {
-    const startResponse = await withTimeout(
-      `${SHELBY_RPC_URL}/v1/multipart-uploads`,
-      {
-        method: "POST",
-        headers: rpcHeaders("application/json"),
-        body: JSON.stringify({
-          rawAccount: account,
-          rawBlobName: blobName,
-          rawPartSize: data.length,
-        }),
-      },
-      START_TIMEOUT_MS,
-      "Starting the Shelby upload"
-    );
+  // However small the file, the declared part size has to clear the RPC's floor.
+  const partSize = Math.max(data.length, MIN_PART_SIZE_BYTES);
 
-    if (!startResponse.ok) {
+  try {
+    let startResponse: Response | null = null;
+    let startError = "";
+
+    for (let attempt = 0; attempt <= START_RETRY_DELAYS_MS.length; attempt += 1) {
+      startResponse = await withTimeout(
+        `${SHELBY_RPC_URL}/v1/multipart-uploads`,
+        {
+          method: "POST",
+          headers: rpcHeaders("application/json"),
+          body: JSON.stringify({
+            rawAccount: account,
+            rawBlobName: blobName,
+            rawPartSize: partSize,
+          }),
+        },
+        START_TIMEOUT_MS,
+        "Starting the Shelby upload"
+      );
+
+      if (startResponse.ok) break;
+
+      startError = await errorBody(startResponse);
+      const retryable =
+        attempt < START_RETRY_DELAYS_MS.length &&
+        isRecoverable(startResponse.status, startError);
+
+      console.warn(
+        `[Circle Storage] Shelby refused to open the upload for "${blobName}" ` +
+          `(HTTP ${startResponse.status}, attempt ${attempt + 1}): ${startError}`
+      );
+
+      if (!retryable) break;
+      await sleep(START_RETRY_DELAYS_MS[attempt]);
+    }
+
+    if (!startResponse || !startResponse.ok) {
       return {
         ok: false,
-        reason: `Shelby refused the upload (HTTP ${startResponse.status}): ${await errorBody(startResponse)}`,
+        reason: `Shelby refused the upload (HTTP ${startResponse?.status}): ${startError}`,
       };
     }
 
@@ -142,27 +187,57 @@ export async function putBlobBytes(params: {
     );
 
     if (!partResponse.ok) {
+      const body = await errorBody(partResponse);
+      console.warn(
+        `[Circle Storage] Shelby rejected the payload for "${blobName}" ` +
+          `(HTTP ${partResponse.status}): ${body}`
+      );
       return {
         ok: false,
-        reason: `Shelby rejected the payload (HTTP ${partResponse.status}): ${await errorBody(partResponse)}`,
+        reason: `Shelby rejected the payload (HTTP ${partResponse.status}): ${body}`,
       };
     }
 
-    // Finalising is the slow phase: Shelby erasure-codes the payload and distributes it.
-    const completeResponse = await withTimeout(
-      `${SHELBY_RPC_URL}/v1/multipart-uploads/${uploadId}/complete`,
-      { method: "POST", headers: rpcHeaders("application/json") },
-      COMPLETE_TIMEOUT_MS,
-      "Finalising the Shelby upload"
+    // Finalising is the slow phase: Shelby erasure-codes the payload and distributes it to
+    // storage providers, and it can report "try again" while that settles.
+    let completeResponse: Response | null = null;
+    let completeError = "";
+
+    for (let attempt = 0; attempt <= COMPLETE_RETRY_DELAYS_MS.length; attempt += 1) {
+      completeResponse = await withTimeout(
+        `${SHELBY_RPC_URL}/v1/multipart-uploads/${uploadId}/complete`,
+        { method: "POST", headers: rpcHeaders("application/json") },
+        COMPLETE_TIMEOUT_MS,
+        "Finalising the Shelby upload"
+      );
+
+      if (completeResponse.ok) break;
+
+      completeError = await errorBody(completeResponse);
+      const retryable =
+        attempt < COMPLETE_RETRY_DELAYS_MS.length &&
+        isRecoverable(completeResponse.status, completeError);
+
+      console.warn(
+        `[Circle Storage] Shelby could not finalise "${blobName}" ` +
+          `(HTTP ${completeResponse.status}, attempt ${attempt + 1}): ${completeError}`
+      );
+
+      if (!retryable) break;
+      await sleep(COMPLETE_RETRY_DELAYS_MS[attempt]);
+    }
+
+    if (!completeResponse || !completeResponse.ok) {
+      return {
+        ok: false,
+        reason: `Shelby could not finalise the upload (HTTP ${completeResponse?.status}): ${completeError}`,
+      };
+    }
+
+    console.log(
+      `[Circle Storage] Stored ${data.length}B on Shelby as "${blobName}" ` +
+        `(declared part size ${partSize}B)`
     );
-
-    if (!completeResponse.ok) {
-      return {
-        ok: false,
-        reason: `Shelby could not finalise the upload (HTTP ${completeResponse.status}): ${await errorBody(completeResponse)}`,
-      };
-    }
-
     return { ok: true };
   } catch (err: any) {
     console.error(`[Circle Storage] Shelby upload failed for "${blobName}":`, err);
