@@ -5,10 +5,19 @@
 
 import React, { useState, useRef } from "react";
 import { useAptosWallet } from "../lib/aptos-wallet";
+import {
+  FUNGIBLE_METADATA_TYPE,
+  FUNGIBLE_TRANSFER_FUNCTION,
+  LEASE_TREASURY_ADDRESS,
+  SHELBY_USD_ASSET_TYPE,
+  SHELBY_USD_SYMBOL,
+  leaseFee,
+  leaseFeeSmallestUnits
+} from "../shelby";
 import { Upload, HelpCircle, Shield, FileCheck, Eye, EyeOff, Coins, Zap } from "lucide-react";
 
 export default function FileUploadPage() {
-  const { address, connected, balance, signAndSubmitTransaction } = useAptosWallet();
+  const { address, connected, shelbyUSDBalance, signAndSubmitTransaction } = useAptosWallet();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // States
@@ -22,22 +31,9 @@ export default function FileUploadPage() {
   const [uploadSuccess, setUploadSuccess] = useState<boolean>(false);
   const [generatedRef, setGeneratedRef] = useState<string>("");
 
-  // Storage lease rate calculation weights (in APT per byte per month)
-  const leaseCostFactor = {
-    "7d": 0.002,
-    "30d": 0.008,
-    "90d": 0.02,
-    "365d": 0.07
-  };
-
-  const calculateLeaseFee = () => {
-    if (!file) return 0;
-    // Base cost: 0.1 APT, plus tiny fractional cost for sizing and lease length
-    const fileBytes = file.size;
-    const factor = leaseCostFactor[duration];
-    const sizeScaledFee = (fileBytes / 1024 / 1024) * factor;
-    return parseFloat((0.05 + sizeScaledFee).toFixed(4));
-  };
+  // The fee schedule lives in src/shelby.ts because the server recomputes it when verifying
+  // the lease payment. Both sides must agree or the upload is rejected.
+  const calculateLeaseFee = () => (file ? leaseFee(file.size, duration) : 0);
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -89,9 +85,12 @@ export default function FileUploadPage() {
       return;
     }
 
-    const leaseFee = calculateLeaseFee();
-    if (balance < leaseFee) {
-      alert(`Sufficient balance required to lock lease. Rent requires ${leaseFee} APT, but your balance is only ${balance.toFixed(2)} APT.`);
+    const fee = calculateLeaseFee();
+    if (shelbyUSDBalance < fee) {
+      alert(
+        `Sufficient balance required to lock lease. Rent requires ${fee.toFixed(4)} ${SHELBY_USD_SYMBOL}, ` +
+        `but your balance is only ${shelbyUSDBalance.toFixed(4)} ${SHELBY_USD_SYMBOL}.`
+      );
       return;
     }
 
@@ -99,18 +98,23 @@ export default function FileUploadPage() {
     setUploadSuccess(false);
 
     try {
-      // Step 1: On-Chain Storage Lease lock allocation
-      setUploadStep("Submitting on-chain transaction lock to Shelby contract registry...");
+      // Step 1: Pay the storage lease in ShelbyUSD.
+      //
+      // This transfers the fungible asset through the framework's primary store rather than
+      // calling shelby_usd::transfer, which is restricted to the token's admin.
+      setUploadStep("Submitting the ShelbyUSD storage lease payment...");
       const txPayload = {
-        type: "entry_function_payload",
-        function: "0x3::shelby::lock_storage_fee",
-        type_arguments: [],
-        arguments: [address, file.size, duration],
-        amount: leaseFee // Deducts lease fee from test account sandbox state
+        function: FUNGIBLE_TRANSFER_FUNCTION,
+        typeArguments: [FUNGIBLE_METADATA_TYPE],
+        functionArguments: [
+          SHELBY_USD_ASSET_TYPE,
+          LEASE_TREASURY_ADDRESS,
+          String(leaseFeeSmallestUnits(file.size, duration))
+        ]
       };
 
       const result = await signAndSubmitTransaction(txPayload);
-      console.log("Aptos Testnet receipt hash:", result.hash);
+      console.log("Shelby lease payment hash:", result.hash);
 
       // Step 2: Client symmetric encrypt simulation & file base64 bundling
       setUploadStep("Preparing chunk streams and applying local AES-256 client cypher headers...");
@@ -125,13 +129,13 @@ export default function FileUploadPage() {
         },
         body: JSON.stringify({
           name: file.name,
-          size: file.size,
           shelby_ref: `sh_testnet_${result.hash.slice(2, 24)}`,
           price: visibility === "private" ? 0 : parseFloat(price),
           visibility,
           duration,
           file_data: fileBase64,
-          content_type: file.type
+          content_type: file.type,
+          lease_tx: result.hash
         })
       });
 
@@ -353,7 +357,14 @@ export default function FileUploadPage() {
                     <span className="text-xs text-white/70 font-semibold direct-lease-label">On-Chain Lease cost:</span>
                     <span id="label-lease-cost" className="text-lg font-mono text-white tracking-tight flex items-center gap-1 font-bold">
                       <Coins className="w-4 h-4 text-amber-500" />
-                      {calculateLeaseFee().toFixed(4)} APT
+                      {calculateLeaseFee().toFixed(4)} {SHELBY_USD_SYMBOL}
+                    </span>
+                  </div>
+
+                  <div className="flex justify-between text-xs">
+                    <span className="text-white/60">Your {SHELBY_USD_SYMBOL} balance:</span>
+                    <span className="text-white font-bold font-mono">
+                      {shelbyUSDBalance.toFixed(4)} {SHELBY_USD_SYMBOL}
                     </span>
                   </div>
                 </div>

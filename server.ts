@@ -23,7 +23,8 @@ import {
   sessionAddress,
   verifyWalletSignature,
 } from "./auth";
-import { simulatedPaymentsAllowed, verifyAptPayment } from "./payments";
+import { simulatedPaymentsAllowed, verifyAptPayment, verifyShelbyUsdPayment } from "./payments";
+import { LEASE_TREASURY_ADDRESS, isLeaseDuration, leaseFeeSmallestUnits } from "./src/shelby";
 
 const PORT = Number(process.env.PORT) || 3000;
 const DB_FILE = path.join(process.cwd(), "server-db.json");
@@ -52,6 +53,7 @@ interface DatabaseSchema {
       aes_key: string;
       file_data: string; // Encrypted file payload (Base64)
       content_type: string;
+      lease_tx: string; // Hash of the verified ShelbyUSD lease payment
     };
   };
   purchases: PurchaseRecord[];
@@ -92,6 +94,25 @@ async function startServer() {
   app.use(cookieParser());
 
   const db = loadDatabase();
+
+  /** True when a lease payment has already been spent on an earlier upload. */
+  const leaseTxAlreadyUsed = async (txHash: string): Promise<boolean> => {
+    if (supabase) {
+      try {
+        const { data } = await supabase
+          .from("files")
+          .select("id")
+          .eq("lease_tx", txHash)
+          .maybeSingle();
+        if (data) return true;
+      } catch (err) {
+        console.error("[Supabase DB Error] Lease reuse check failed:", err);
+        // Fall through to the local store rather than allowing an unchecked reuse.
+      }
+    }
+
+    return Object.values(db.files).some(f => f.lease_tx === txHash);
+  };
 
   // AUTH ROUTES
   //
@@ -341,7 +362,7 @@ async function startServer() {
 
   // POST Upload storage file — the uploader is always the authenticated caller
   app.post("/api/files/upload", requireAuth, async (req, res) => {
-    const { name, size, shelby_ref, price, visibility, duration, file_data, content_type } = req.body;
+    const { name, shelby_ref, price, visibility, duration, file_data, content_type, lease_tx } = req.body;
 
     if (!name || !shelby_ref || !duration || !file_data) {
       return res.status(400).json({ error: "Missing required upload parameters." });
@@ -351,7 +372,7 @@ async function startServer() {
       return res.status(400).json({ error: "Visibility must be either 'public' or 'private'." });
     }
 
-    if (!["7d", "30d", "90d", "365d"].includes(String(duration))) {
+    if (!isLeaseDuration(duration)) {
       return res.status(400).json({ error: "Unsupported lease duration." });
     }
 
@@ -366,6 +387,41 @@ async function startServer() {
     const id = "file_" + crypto.randomUUID();
     const cleanUploader = req.walletAddress!;
     const aesKey = "aes_key_" + Math.random().toString(36).substring(2, 15);
+
+    // Verify the storage lease was actually paid. The fee is recomputed here from the payload
+    // we received, so a client cannot declare its own price.
+    const requiredLeaseUnits = leaseFeeSmallestUnits(actualSize, duration);
+    const leaseTxHash = String(lease_tx || "");
+
+    if (!leaseTxHash) {
+      return res.status(400).json({ error: "Missing the storage lease payment transaction." });
+    }
+
+    if (await leaseTxAlreadyUsed(leaseTxHash)) {
+      return res.status(400).json({ error: "That lease payment has already been redeemed." });
+    }
+
+    const lease = await verifyShelbyUsdPayment({
+      txHash: leaseTxHash,
+      expectedSender: cleanUploader,
+      expectedRecipient: LEASE_TREASURY_ADDRESS,
+      minimumUnits: requiredLeaseUnits,
+    });
+
+    if (!lease.ok) {
+      if (simulatedPaymentsAllowed()) {
+        console.warn(
+          `[Circle Storage] ALLOW_SIMULATED_PAYMENTS is on — accepting unverified lease ` +
+            `payment for "${name}" (${lease.reason})`
+        );
+      } else {
+        console.warn(`[Circle Storage] Lease payment rejected for "${name}": ${lease.reason}`);
+        return res.status(400).json({
+          error: "LEASE_NOT_VERIFIED",
+          message: `Could not verify the storage lease payment: ${lease.reason}`,
+        });
+      }
+    }
 
     if (supabase) {
       try {
@@ -398,7 +454,8 @@ async function startServer() {
           created_at: new Date().toISOString(),
           aes_key: aesKey,
           file_data,
-          content_type: content_type || "application/octet-stream"
+          content_type: content_type || "application/octet-stream",
+          lease_tx: leaseTxHash
         };
 
         const { error: insertError } = await supabase.from("files").insert(secureFilePayload);
@@ -427,7 +484,8 @@ async function startServer() {
       created_at: new Date().toISOString(),
       aes_key: aesKey,
       file_data,
-      content_type: content_type || "application/octet-stream"
+      content_type: content_type || "application/octet-stream",
+      lease_tx: leaseTxHash
     };
 
     saveDatabase(db);

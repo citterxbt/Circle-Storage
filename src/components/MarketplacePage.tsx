@@ -67,13 +67,16 @@ export default function MarketplacePage() {
     setPurchasingId(file.id);
 
     try {
-      // Step 1: Fire direct Aptos Testnet peer-to-peer APT transfer payload to uploader wallet
+      // Step 1: Pay the uploader in APT.
+      //
+      // aptos_account::transfer rather than coin::transfer: the latter aborts when the
+      // recipient has no registered CoinStore, which is now common since APT became a
+      // fungible asset. This variant handles that case.
       const txPayload = {
-        type: "entry_function_payload",
-        function: "0x1::coin::transfer",
-        type_arguments: ["0x1::aptos_coin::AptosCoin"],
-        arguments: [file.uploader, Math.floor(file.price * 100000000)], // Octas multiplication for APT precision
-        amount: file.price // Deductible pricing for Sandbox adapter
+        function: "0x1::aptos_account::transfer",
+        typeArguments: [],
+        functionArguments: [file.uploader, String(Math.floor(file.price * 100_000_000))],
+        amount: file.price // Used only for the client-side affordability check
       };
 
       const result = await signAndSubmitTransaction(txPayload);
