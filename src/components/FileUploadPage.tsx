@@ -9,10 +9,16 @@ import {
   FUNGIBLE_METADATA_TYPE,
   FUNGIBLE_TRANSFER_FUNCTION,
   LEASE_TREASURY_ADDRESS,
+  REGISTER_BLOB_FUNCTION,
+  REGISTER_BLOB_MAX_GAS,
+  SHELBY_PAYMENT_TIER,
   SHELBY_USD_ASSET_TYPE,
   SHELBY_USD_SYMBOL,
+  buildBlobName,
+  leaseExpirationMicros,
   leaseFee,
-  leaseFeeSmallestUnits
+  leaseFeeSmallestUnits,
+  shelbyStorageCost
 } from "../shelby";
 import { Upload, HelpCircle, Shield, FileCheck, Eye, EyeOff, Coins, Zap } from "lucide-react";
 
@@ -98,12 +104,12 @@ export default function FileUploadPage() {
     setUploadSuccess(false);
 
     try {
-      // Step 1: Pay the storage lease in ShelbyUSD.
+      // Step 1: Pay this application's fee in ShelbyUSD.
       //
       // This transfers the fungible asset through the framework's primary store rather than
       // calling shelby_usd::transfer, which is restricted to the token's admin.
-      setUploadStep("Submitting the ShelbyUSD storage lease payment...");
-      const txPayload = {
+      setUploadStep("Waiting for signature: platform fee...");
+      const feeResult = await signAndSubmitTransaction({
         function: FUNGIBLE_TRANSFER_FUNCTION,
         typeArguments: [FUNGIBLE_METADATA_TYPE],
         functionArguments: [
@@ -111,17 +117,56 @@ export default function FileUploadPage() {
           LEASE_TREASURY_ADDRESS,
           String(leaseFeeSmallestUnits(file.size, duration))
         ]
-      };
+      });
+      console.log("Platform fee hash:", feeResult.hash);
 
-      const result = await signAndSubmitTransaction(txPayload);
-      console.log("Shelby lease payment hash:", result.hash);
+      // Step 2: Work out Shelby's commitments for the file.
+      //
+      // The SDK erasure-codes the bytes and derives the merkle root the contract records. This
+      // has to happen before registration, because the root is one of its arguments.
+      setUploadStep("Erasure coding the file and computing Shelby commitments...");
+      const fileBytes = new Uint8Array(await file.arrayBuffer());
+      const {
+        createDefaultErasureCodingProvider,
+        defaultErasureCodingConfig,
+        expectedTotalChunksets,
+        generateCommitments
+      } = await import("@shelby-protocol/sdk/browser");
 
-      // Step 2: Client symmetric encrypt simulation & file base64 bundling
-      setUploadStep("Preparing chunk streams and applying local AES-256 client cypher headers...");
+      const erasureConfig = defaultErasureCodingConfig();
+      const provider = await createDefaultErasureCodingProvider();
+      const commitments = await generateCommitments(provider, fileBytes);
+      const numChunksets = expectedTotalChunksets(
+        fileBytes.length,
+        erasureConfig.chunkSizeBytes * erasureConfig.erasure_k
+      );
+
+      // Step 3: Register the blob on Shelby, signed by the uploader's own wallet so the blob
+      // belongs to them. The payload is built here rather than with the SDK's helper, which
+      // targets shelbynet's wider register_blob and would not link against testnet's.
+      const blobName = buildBlobName(address, `up_${Date.now()}`, file.name);
+      setUploadStep("Waiting for signature: registering the blob on Shelby...");
+      const registerResult = await signAndSubmitTransaction({
+        function: REGISTER_BLOB_FUNCTION,
+        typeArguments: [],
+        functionArguments: [
+          blobName,
+          String(leaseExpirationMicros(duration, Date.now())),
+          commitments.blob_merkle_root,
+          numChunksets,
+          String(fileBytes.length),
+          SHELBY_PAYMENT_TIER,
+          erasureConfig.enumIndex
+        ],
+        options: { maxGasAmount: REGISTER_BLOB_MAX_GAS }
+      });
+      console.log("Shelby registration hash:", registerResult.hash);
+
+      // Step 4: Hand the bytes to the server, which transfers them to Shelby's RPC under this
+      // project's API key and keeps no copy of its own.
+      setUploadStep("Transferring the file to Shelby storage providers...");
       const fileBase64 = await readFileAsBase64(file);
 
-      // Step 3: Server registration payload
-      setUploadStep("Dispatching secured bytecode chunks directly onto Shelby Node Gateway...");
       const uploadRes = await fetch("/api/files/upload", {
         method: "POST",
         headers: {
@@ -129,13 +174,15 @@ export default function FileUploadPage() {
         },
         body: JSON.stringify({
           name: file.name,
-          shelby_ref: `sh_testnet_${result.hash.slice(2, 24)}`,
+          shelby_ref: blobName,
           price: visibility === "private" ? 0 : parseFloat(price),
           visibility,
           duration,
           file_data: fileBase64,
           content_type: file.type,
-          lease_tx: result.hash
+          lease_tx: feeResult.hash,
+          blob_name: blobName,
+          register_tx: registerResult.hash
         })
       });
 
@@ -354,17 +401,24 @@ export default function FileUploadPage() {
                   </div>
 
                   <div className="pt-3 border-t border-white/10 flex justify-between items-center">
-                    <span className="text-xs text-white/70 font-semibold direct-lease-label">On-Chain Lease cost:</span>
+                    <span className="text-xs text-white/70 font-semibold direct-lease-label">Platform fee:</span>
                     <span id="label-lease-cost" className="text-lg font-mono text-white tracking-tight flex items-center gap-1 font-bold">
                       <Coins className="w-4 h-4 text-amber-500" />
-                      {calculateLeaseFee().toFixed(4)} {SHELBY_USD_SYMBOL}
+                      {calculateLeaseFee().toFixed(8)} {SHELBY_USD_SYMBOL}
+                    </span>
+                  </div>
+
+                  <div className="flex justify-between text-xs">
+                    <span className="text-white/60">Shelby storage, paid to the protocol:</span>
+                    <span className="text-white font-bold font-mono">
+                      {(file ? shelbyStorageCost(file.size, duration) : 0).toFixed(8)} {SHELBY_USD_SYMBOL}
                     </span>
                   </div>
 
                   <div className="flex justify-between text-xs">
                     <span className="text-white/60">Your {SHELBY_USD_SYMBOL} balance:</span>
                     <span className="text-white font-bold font-mono">
-                      {shelbyUSDBalance.toFixed(4)} {SHELBY_USD_SYMBOL}
+                      {shelbyUSDBalance.toFixed(8)} {SHELBY_USD_SYMBOL}
                     </span>
                   </div>
                 </div>

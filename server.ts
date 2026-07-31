@@ -31,7 +31,7 @@ import {
   leaseExpirationMicros,
   leaseFeeSmallestUnits,
 } from "./src/shelby";
-import { readBlob, shelbyStorageConfigured, writeBlob } from "./shelby-storage";
+import { getBlobBytes, putBlobBytes, verifyBlobRegistration } from "./shelby-storage";
 
 const PORT = Number(process.env.PORT) || 3000;
 const DB_FILE = path.join(process.cwd(), "server-db.json");
@@ -136,7 +136,7 @@ async function startServer() {
       return { data: file.file_data || "" };
     }
 
-    const read = await readBlob({ owner: file.shelby_owner, blobName: file.shelby_ref });
+    const read = await getBlobBytes({ account: file.shelby_owner, blobName: file.shelby_ref });
     if (!read.ok) return { reason: read.reason };
 
     return { data: read.data!.toString("base64") };
@@ -390,7 +390,10 @@ async function startServer() {
 
   // POST Upload storage file — the uploader is always the authenticated caller
   app.post("/api/files/upload", requireAuth, async (req, res) => {
-    const { name, shelby_ref, price, visibility, duration, file_data, content_type, lease_tx } = req.body;
+    const {
+      name, shelby_ref, price, visibility, duration, file_data, content_type, lease_tx,
+      blob_name, register_tx
+    } = req.body;
 
     if (!name || !shelby_ref || !duration || !file_data) {
       return res.status(400).json({ error: "Missing required upload parameters." });
@@ -451,19 +454,41 @@ async function startServer() {
       }
     }
 
-    // Store the bytes on Shelby when a service key is configured. `shelbyRef` is the real
-    // blob name, and `storedPayload` is left empty so the file is not duplicated locally.
-    // Without a key we keep the previous behaviour and hold the bytes ourselves.
+    // When the client registered a Shelby blob for this upload, transfer the bytes there and
+    // keep no local copy. `shelbyRef` becomes the real blob name and `shelbyOwner` the wallet
+    // that owns it. Uploads without a registration keep the previous behaviour of holding the
+    // bytes here, the same way the server falls back from Supabase to a local file.
     let shelbyRef = String(shelby_ref);
     let shelbyOwner = "";
     let storedPayload = String(file_data);
 
-    if (shelbyStorageConfigured()) {
-      const blobName = buildBlobName(cleanUploader, id, String(name));
-      const written = await writeBlob({
+    if (blob_name || register_tx) {
+      if (!blob_name || !register_tx) {
+        return res.status(400).json({
+          error: "A Shelby upload needs both blob_name and register_tx.",
+        });
+      }
+
+      // The registration decides the owner and the name, so a client cannot claim a blob it
+      // did not register, or one registered by somebody else.
+      const registration = await verifyBlobRegistration({
+        txHash: String(register_tx),
+        expectedOwner: cleanUploader,
+        expectedBlobName: String(blob_name),
+      });
+
+      if (!registration.ok) {
+        console.warn(`[Circle Storage] Blob registration rejected: ${registration.reason}`);
+        return res.status(400).json({
+          error: "REGISTRATION_NOT_VERIFIED",
+          message: `Could not verify the Shelby blob registration: ${registration.reason}`,
+        });
+      }
+
+      const written = await putBlobBytes({
+        account: cleanUploader,
+        blobName: String(blob_name),
         data: Buffer.from(storedPayload, "base64"),
-        blobName,
-        expirationMicros: leaseExpirationMicros(duration, Date.now()),
       });
 
       if (!written.ok) {
@@ -473,8 +498,8 @@ async function startServer() {
         });
       }
 
-      shelbyRef = blobName;
-      shelbyOwner = written.owner!;
+      shelbyRef = String(blob_name);
+      shelbyOwner = cleanUploader;
       storedPayload = "";
     }
 

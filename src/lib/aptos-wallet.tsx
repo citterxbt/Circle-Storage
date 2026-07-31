@@ -1460,7 +1460,10 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
             function: payload.function,
             typeArguments,
             functionArguments: args
-          }
+          },
+          // Registering a Shelby blob needs a higher gas ceiling than the wallet's default.
+          ...(payload.options ? { gasUnitPrice: payload.options.gasUnitPrice,
+                                  maxGasAmount: payload.options.maxGasAmount } : {})
         });
 
         const hash = readTransactionHash(result);

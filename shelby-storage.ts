@@ -6,164 +6,265 @@
 /**
  * Storing and retrieving file bytes on the Shelby network.
  *
- * Shelby's high-level upload requires an `Account`, meaning a private key, so it cannot be
- * driven by a browser wallet. Uploads therefore run here, server-side, under a service
- * account. That account is the blob owner as far as Shelby is concerned; who may read a file
- * is still decided by this application's own authorisation.
+ * Blobs are registered on chain by the uploader's own wallet, in the browser, so the uploader
+ * owns the blob and this server holds no key. What happens here is the byte transfer: the
+ * Shelby RPC's multipart endpoints for writes and a plain GET for reads, both carrying this
+ * project's API key so storage and egress are attributed to it rather than to an anonymous
+ * client.
  *
- * Everything is optional: with no service key configured the server falls back to keeping
- * bytes in its own store, the same way it falls back from Supabase to a local JSON file.
+ * The SDK's `upload()` is deliberately not used: it builds the 10-argument `register_blob`
+ * found on shelbynet, while Aptos testnet has a 7-argument version, so the transaction fails
+ * to build. See the Shelby storage section of the README.
  */
 
-import {
-  Account,
-  Ed25519PrivateKey,
-  Network,
-  PrivateKey,
-  PrivateKeyVariants,
-} from "@aptos-labs/ts-sdk";
-import { ShelbyNodeClient } from "@shelby-protocol/sdk/node";
+import { AccountAddress } from "@aptos-labs/ts-sdk";
 
-/** Shelby accepts only these three networks. */
-const SHELBY_NETWORKS = {
-  local: Network.LOCAL,
-  testnet: Network.TESTNET,
-  shelbynet: Network.SHELBYNET,
-} as const;
+const SHELBY_RPC_URL = (
+  process.env.SHELBY_RPC_URL || "https://api.testnet.shelby.xyz/shelby"
+).replace(/\/+$/, "");
 
-const SHELBY_NETWORK =
-  SHELBY_NETWORKS[(process.env.SHELBY_NETWORK || "testnet") as keyof typeof SHELBY_NETWORKS] ||
-  Network.TESTNET;
+const SHELBY_API_KEY = process.env.SHELBY_API_KEY || "";
 
-let cached: { client: ShelbyNodeClient; account: Account } | null = null;
-let initFailed = false;
+const APTOS_FULLNODE =
+  process.env.APTOS_FULLNODE_URL || "https://fullnode.testnet.aptoslabs.com/v1";
 
-/** True when a service key is present, so uploads can reach Shelby. */
-export function shelbyStorageConfigured(): boolean {
-  return !initFailed && Boolean(process.env.SHELBY_ACCOUNT_PRIVATE_KEY);
+/** Shelby's own deployer on both Aptos testnet and shelbynet. */
+const SHELBY_DEPLOYER =
+  process.env.SHELBY_CONTRACT_ADDRESS ||
+  "0x85fdb9a176ab8ef1d9d9c1b60d60b3924f0800ac1de1cc2085fb0b8bb4988e6a";
+
+const START_TIMEOUT_MS = 60_000;
+const PART_TIMEOUT_MS = 120_000;
+const COMPLETE_TIMEOUT_MS = 180_000;
+
+/** Blob names carry path structure, so keep the slashes and escape only the segments. */
+function blobUrl(account: string, blobName: string): string {
+  const encoded = blobName
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+  return `${SHELBY_RPC_URL}/v1/blobs/${account}/${encoded}`;
 }
 
-/**
- * Build the client and service account once, on first use.
- *
- * A malformed key is reported once and then disables Shelby storage, so a bad value degrades
- * to local storage instead of failing every upload with the same error.
- */
-function shelby(): { client: ShelbyNodeClient; account: Account } | null {
-  if (cached) return cached;
-  if (initFailed) return null;
+function rpcHeaders(contentType: string): Record<string, string> {
+  return {
+    "Content-Type": contentType,
+    ...(SHELBY_API_KEY ? { Authorization: `Bearer ${SHELBY_API_KEY}` } : {}),
+  };
+}
 
-  const raw = process.env.SHELBY_ACCOUNT_PRIVATE_KEY;
-  if (!raw) return null;
-
+async function withTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+  label: string
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const privateKey = new Ed25519PrivateKey(
-      PrivateKey.formatPrivateKey(raw.trim(), PrivateKeyVariants.Ed25519)
-    );
-    const account = Account.fromPrivateKey({ privateKey });
-
-    const client = new ShelbyNodeClient({
-      network: SHELBY_NETWORK,
-      ...(process.env.APTOS_API_KEY ? { apiKey: process.env.APTOS_API_KEY } : {}),
-    });
-
-    console.log(
-      `[Circle Storage] Shelby storage enabled on ${SHELBY_NETWORK} as ` +
-        `${account.accountAddress.toStringLong()}`
-    );
-
-    cached = { client, account };
-    return cached;
-  } catch (err) {
-    initFailed = true;
-    console.error(
-      "[Circle Storage] SHELBY_ACCOUNT_PRIVATE_KEY could not be loaded; falling back to " +
-        "local file storage.",
-      err
-    );
-    return null;
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (err: any) {
+    if (err?.name === "AbortError") {
+      throw new Error(`${label} timed out; the Shelby RPC did not respond in time.`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
-/** The address that owns the blobs this server writes, needed to read them back. */
-export function shelbyServiceAddress(): string | null {
-  const active = shelby();
-  return active ? active.account.accountAddress.toStringLong() : null;
+async function errorBody(response: Response): Promise<string> {
+  try {
+    return (await response.text()).slice(0, 300);
+  } catch {
+    return "(could not read error body)";
+  }
 }
 
-export interface ShelbyWriteResult {
+export interface ShelbyResult {
   ok: boolean;
-  /** Set when ok: the address the blob is stored under. */
-  owner?: string;
-  /** Set when the write failed: why. */
+  /** Set when a read succeeded. */
+  data?: Buffer;
+  /** Set when the call failed: why. */
   reason?: string;
 }
 
 /**
- * Write bytes to Shelby under `blobName`, expiring at `expirationMicros`.
+ * Transfer bytes for a blob that is already registered on chain.
  *
- * The SDK handles erasure coding, on-chain registration and the upload to storage providers.
- * The service account pays gas in APT and storage in ShelbyUSD, so both must be funded.
+ * Registration has to land first — the RPC rejects an unknown blob — which is why the browser
+ * signs and confirms `register_blob` before calling this.
  */
-export async function writeBlob(params: {
-  data: Buffer;
+export async function putBlobBytes(params: {
+  account: string;
   blobName: string;
-  expirationMicros: number;
-}): Promise<ShelbyWriteResult> {
-  const active = shelby();
-  if (!active) return { ok: false, reason: "Shelby storage is not configured." };
+  data: Buffer;
+}): Promise<ShelbyResult> {
+  const { account, blobName, data } = params;
+
+  if (!SHELBY_API_KEY) {
+    console.warn(
+      "[Circle Storage] SHELBY_API_KEY is unset; Shelby traffic is anonymous and rate-limited."
+    );
+  }
 
   try {
-    await active.client.upload({
-      blobData: new Uint8Array(params.data),
-      signer: active.account,
-      blobName: params.blobName,
-      expirationMicros: params.expirationMicros,
-    });
+    const startResponse = await withTimeout(
+      `${SHELBY_RPC_URL}/v1/multipart-uploads`,
+      {
+        method: "POST",
+        headers: rpcHeaders("application/json"),
+        body: JSON.stringify({
+          rawAccount: account,
+          rawBlobName: blobName,
+          rawPartSize: data.length,
+        }),
+      },
+      START_TIMEOUT_MS,
+      "Starting the Shelby upload"
+    );
 
-    return { ok: true, owner: active.account.accountAddress.toStringLong() };
+    if (!startResponse.ok) {
+      return {
+        ok: false,
+        reason: `Shelby refused the upload (HTTP ${startResponse.status}): ${await errorBody(startResponse)}`,
+      };
+    }
+
+    const { uploadId } = (await startResponse.json()) as { uploadId?: string };
+    if (!uploadId) return { ok: false, reason: "Shelby did not return an upload id." };
+
+    const partResponse = await withTimeout(
+      `${SHELBY_RPC_URL}/v1/multipart-uploads/${uploadId}/parts/0`,
+      { method: "PUT", headers: rpcHeaders("application/octet-stream"), body: new Uint8Array(data) },
+      PART_TIMEOUT_MS,
+      "Transferring the file to Shelby"
+    );
+
+    if (!partResponse.ok) {
+      return {
+        ok: false,
+        reason: `Shelby rejected the payload (HTTP ${partResponse.status}): ${await errorBody(partResponse)}`,
+      };
+    }
+
+    // Finalising is the slow phase: Shelby erasure-codes the payload and distributes it.
+    const completeResponse = await withTimeout(
+      `${SHELBY_RPC_URL}/v1/multipart-uploads/${uploadId}/complete`,
+      { method: "POST", headers: rpcHeaders("application/json") },
+      COMPLETE_TIMEOUT_MS,
+      "Finalising the Shelby upload"
+    );
+
+    if (!completeResponse.ok) {
+      return {
+        ok: false,
+        reason: `Shelby could not finalise the upload (HTTP ${completeResponse.status}): ${await errorBody(completeResponse)}`,
+      };
+    }
+
+    return { ok: true };
   } catch (err: any) {
-    console.error(`[Circle Storage] Shelby upload failed for "${params.blobName}":`, err);
+    console.error(`[Circle Storage] Shelby upload failed for "${blobName}":`, err);
     return { ok: false, reason: err?.message || "Shelby upload failed." };
   }
 }
 
-export interface ShelbyReadResult {
+/** Read a blob back. Reads need no signature, only the owner and the name. */
+export async function getBlobBytes(params: {
+  account: string;
+  blobName: string;
+}): Promise<ShelbyResult> {
+  try {
+    const response = await withTimeout(
+      blobUrl(params.account, params.blobName),
+      { method: "GET", headers: SHELBY_API_KEY ? { Authorization: `Bearer ${SHELBY_API_KEY}` } : {} },
+      COMPLETE_TIMEOUT_MS,
+      "Reading the file from Shelby"
+    );
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        reason: `Shelby read failed (HTTP ${response.status}): ${await errorBody(response)}`,
+      };
+    }
+
+    return { ok: true, data: Buffer.from(await response.arrayBuffer()) };
+  } catch (err: any) {
+    console.error(`[Circle Storage] Shelby read failed for "${params.blobName}":`, err);
+    return { ok: false, reason: err?.message || "Shelby read failed." };
+  }
+}
+
+export interface RegistrationResult {
   ok: boolean;
-  /** Set when ok: the blob contents. */
-  data?: Buffer;
-  /** Set when the read failed: why. */
   reason?: string;
 }
 
 /**
- * Read a blob back. This needs no signer, so it works for any blob the owner made readable.
+ * Confirm on chain that the caller really registered this blob.
+ *
+ * Without this a client could name any blob and have its bytes accepted, or claim a blob
+ * somebody else registered. Both the owner and the name come from the transaction rather than
+ * from the request.
  */
-export async function readBlob(params: {
-  owner: string;
-  blobName: string;
-}): Promise<ShelbyReadResult> {
-  const active = shelby();
-  if (!active) return { ok: false, reason: "Shelby storage is not configured." };
+export async function verifyBlobRegistration(params: {
+  txHash: string;
+  expectedOwner: string;
+  expectedBlobName: string;
+}): Promise<RegistrationResult> {
+  const { txHash, expectedOwner, expectedBlobName } = params;
+
+  if (!/^0x[0-9a-fA-F]{64}$/.test(txHash)) {
+    return { ok: false, reason: "Registration hash is not a 32-byte hex value." };
+  }
+
+  let tx: any;
+  try {
+    const response = await fetch(`${APTOS_FULLNODE}/transactions/by_hash/${txHash}`);
+    if (response.status === 404) {
+      return { ok: false, reason: "Registration transaction was not found on chain." };
+    }
+    if (!response.ok) {
+      return { ok: false, reason: `Aptos node returned HTTP ${response.status}.` };
+    }
+    tx = await response.json();
+  } catch (err) {
+    console.warn("[Circle Storage] Aptos node unreachable during registration check:", err);
+    return { ok: false, reason: "Could not reach the Aptos node to check the registration." };
+  }
+
+  if (tx?.type !== "user_transaction") {
+    return { ok: false, reason: "Hash does not refer to a user transaction." };
+  }
+  if (tx.success !== true) {
+    return { ok: false, reason: `Registration did not succeed (${tx.vm_status || "unknown"}).` };
+  }
 
   try {
-    const blob = await active.client.download({
-      account: params.owner,
-      blobName: params.blobName,
-    });
-
-    // A ShelbyBlob exposes a stream rather than a buffer, so drain it.
-    const chunks: Buffer[] = [];
-    const reader = blob.readable.getReader();
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value) chunks.push(Buffer.from(value as Uint8Array));
+    if (!AccountAddress.from(String(tx.sender)).equals(AccountAddress.from(expectedOwner))) {
+      return { ok: false, reason: "Registration was not sent by the uploading wallet." };
     }
-
-    return { ok: true, data: Buffer.concat(chunks) };
-  } catch (err: any) {
-    console.error(`[Circle Storage] Shelby download failed for "${params.blobName}":`, err);
-    return { ok: false, reason: err?.message || "Shelby download failed." };
+  } catch {
+    return { ok: false, reason: "Registration sender could not be read." };
   }
+
+  const payload = tx.payload;
+  if (payload?.type !== "entry_function_payload") {
+    return { ok: false, reason: "Registration is not a direct entry-function call." };
+  }
+
+  const expectedFunction = `${SHELBY_DEPLOYER}::blob_metadata::register_blob`;
+  if (String(payload.function).toLowerCase() !== expectedFunction.toLowerCase()) {
+    return { ok: false, reason: `Unexpected registration function: ${payload.function}` };
+  }
+
+  // register_blob's first argument is the blob name.
+  const args: unknown[] = Array.isArray(payload.arguments) ? payload.arguments : [];
+  if (String(args[0]) !== expectedBlobName) {
+    return { ok: false, reason: "Registration is for a different blob name." };
+  }
+
+  return { ok: true };
 }

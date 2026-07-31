@@ -39,6 +39,24 @@ export const FUNGIBLE_TRANSFER_FUNCTION = "0x1::primary_fungible_store::transfer
 
 export const FUNGIBLE_METADATA_TYPE = "0x1::fungible_asset::Metadata";
 
+/** Shelby's deployer, the same address on Aptos testnet and shelbynet. */
+export const SHELBY_DEPLOYER =
+  "0x85fdb9a176ab8ef1d9d9c1b60d60b3924f0800ac1de1cc2085fb0b8bb4988e6a";
+
+export const REGISTER_BLOB_FUNCTION = `${SHELBY_DEPLOYER}::blob_metadata::register_blob`;
+
+/**
+ * The payment tier to register under. Shelby's `payment` module currently exposes a single
+ * active tier at index 0.
+ */
+export const SHELBY_PAYMENT_TIER = 0;
+
+/**
+ * Registering a blob costs far more gas than a plain transfer, and the default ceiling is not
+ * always enough — an under-funded registration aborts with "Out of gas" after the fee is spent.
+ */
+export const REGISTER_BLOB_MAX_GAS = 100_000;
+
 export type LeaseDuration = "7d" | "30d" | "90d" | "365d";
 
 const LEASE_DAYS: Record<LeaseDuration, number> = {
@@ -80,31 +98,49 @@ export function buildBlobName(uploader: string, fileId: string, fileName: string
   return name.slice(0, MAX_BLOB_NAME_LENGTH).replace(/\/+$/, "");
 }
 
-/** ShelbyUSD charged per megabyte, by lease length. */
-const LEASE_COST_PER_MB: Record<LeaseDuration, number> = {
-  "7d": 0.002,
-  "30d": 0.008,
-  "90d": 0.02,
-  "365d": 0.07,
-};
-
-const LEASE_BASE_FEE = 0.05;
-
 export function isLeaseDuration(value: unknown): value is LeaseDuration {
   return value === "7d" || value === "30d" || value === "90d" || value === "365d";
 }
 
-/** The lease fee in whole ShelbyUSD, for display. */
-export function leaseFee(sizeBytes: number, duration: LeaseDuration): number {
-  const megabytes = sizeBytes / 1024 / 1024;
-  return LEASE_BASE_FEE + megabytes * LEASE_COST_PER_MB[duration];
+/**
+ * Shelby's own storage price, read from its `payment` module: 39 ShelbyUSD units per chunk per
+ * epoch to the storage provider plus 3 to the admin, with a chunk of 1 MiB and an epoch of a
+ * day. The uploader pays this to the protocol directly when registering the blob.
+ */
+const SHELBY_UNITS_PER_CHUNK_PER_EPOCH = 42;
+const SHELBY_CHUNK_BYTES = 1024 * 1024;
+
+/** What Shelby itself charges to store this file for the lease, in ShelbyUSD units. */
+export function shelbyStorageCostUnits(sizeBytes: number, duration: LeaseDuration): number {
+  const chunks = Math.max(1, Math.ceil(sizeBytes / SHELBY_CHUNK_BYTES));
+  return chunks * SHELBY_UNITS_PER_CHUNK_PER_EPOCH * LEASE_DAYS[duration];
 }
 
 /**
- * The lease fee in the asset's smallest unit, which is what a transfer actually carries.
+ * This application's cut, as a share of what the storage actually costs.
  *
- * Client and server both call this with the same inputs so they arrive at the same integer.
+ * Expressed as a fraction of Shelby's price rather than a flat figure so it stays proportionate
+ * to the storage being paid for. Adjust this one number to change the fee.
+ */
+export const PLATFORM_FEE_RATE = 0.1;
+
+/**
+ * The platform fee in the asset's smallest unit, which is what a transfer actually carries.
+ *
+ * Client and server both call this with the same inputs so they arrive at the same integer: the
+ * client pays it, the server recomputes it to check the payment, and a mismatch of one unit
+ * would reject every upload.
  */
 export function leaseFeeSmallestUnits(sizeBytes: number, duration: LeaseDuration): number {
-  return Math.round(leaseFee(sizeBytes, duration) * 10 ** SHELBY_USD_DECIMALS);
+  return Math.max(1, Math.round(shelbyStorageCostUnits(sizeBytes, duration) * PLATFORM_FEE_RATE));
+}
+
+/** The platform fee in whole ShelbyUSD, for display. */
+export function leaseFee(sizeBytes: number, duration: LeaseDuration): number {
+  return leaseFeeSmallestUnits(sizeBytes, duration) / 10 ** SHELBY_USD_DECIMALS;
+}
+
+/** What Shelby charges, in whole ShelbyUSD, for display alongside the platform fee. */
+export function shelbyStorageCost(sizeBytes: number, duration: LeaseDuration): number {
+  return shelbyStorageCostUnits(sizeBytes, duration) / 10 ** SHELBY_USD_DECIMALS;
 }
