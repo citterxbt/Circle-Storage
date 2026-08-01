@@ -112,8 +112,8 @@ to the log.
 
 ## Deploying with Vercel + Supabase
 
-This is the recommended testnet setup. Vercel serves the Vite app and runs the existing Express
-routes as one catch-all serverless API; Supabase persists profiles, listings, purchases and the
+This is the recommended testnet setup. Vercel serves the Vite app and rewrites every `/api/*`
+request to one Express serverless API; Supabase persists profiles, listings, purchases and the
 single-use wallet sign-in nonces. No persistent Node server is needed.
 
 1. In **Supabase → SQL Editor**, run
@@ -200,7 +200,7 @@ wallet.
 
 ```
 server.ts                  Express API, plus static hosting / Vite middleware
-api/[...path].ts           Vercel serverless wrapper for every /api route
+api/handler.ts              Vercel serverless wrapper for every /api route
 supabase/migrations/       Supabase schema and atomic nonce-consumption function
 src/App.tsx                App shell, tab routing, wallet header
 src/lib/aptos-wallet.tsx   Wallet detection, connection, transaction signing

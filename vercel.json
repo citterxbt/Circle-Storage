@@ -2,8 +2,14 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "buildCommand": "npm run build",
   "functions": {
-    "api/[...path].ts": {
+    "api/handler.ts": {
       "maxDuration": 60
     }
-  }
+  },
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "/api/handler?path=:path*"
+    }
+  ]
 }
