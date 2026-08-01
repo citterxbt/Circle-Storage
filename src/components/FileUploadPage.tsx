@@ -7,6 +7,7 @@ import React, { useState, useRef } from "react";
 import { useAptosWallet } from "../lib/aptos-wallet";
 import { useToast } from "./Toaster";
 import {
+  AUTH_TAG_LENGTH_BYTES,
   ENCRYPTION_ALGORITHM,
   ENCRYPTION_KEY_BITS,
   IV_LENGTH_BYTES,
@@ -46,9 +47,12 @@ export default function FileUploadPage() {
   const [uploadSuccess, setUploadSuccess] = useState<boolean>(false);
   const [generatedRef, setGeneratedRef] = useState<string>("");
 
-  // The fee schedule lives in src/shelby.ts because the server recomputes it when verifying
-  // the lease payment. Both sides must agree or the upload is rejected.
-  const calculateLeaseFee = () => (file ? leaseFee(file.size, duration) : 0);
+  // Everything is charged on what actually gets stored, which is the ciphertext: AES-GCM adds
+  // its authentication tag and nothing else, so the billable size is known before encrypting.
+  // The fee schedule lives in src/shelby.ts because the server recomputes it from the bytes it
+  // receives, and a quote that ignored the tag would fall short at a megabyte boundary.
+  const billableSize = () => (file ? file.size + AUTH_TAG_LENGTH_BYTES : 0);
+  const calculateLeaseFee = () => (file ? leaseFee(billableSize(), duration) : 0);
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -99,26 +103,14 @@ export default function FileUploadPage() {
     setUploadSuccess(false);
 
     try {
-      // Step 1: Pay this application's fee in ShelbyUSD.
-      //
-      // This transfers the fungible asset through the framework's primary store rather than
-      // calling shelby_usd::transfer, which is restricted to the token's admin.
-      setUploadStep("Waiting for signature: platform fee...");
-      const feeResult = await signAndSubmitTransaction({
-        function: FUNGIBLE_TRANSFER_FUNCTION,
-        typeArguments: [FUNGIBLE_METADATA_TYPE],
-        functionArguments: [
-          SHELBY_USD_ASSET_TYPE,
-          LEASE_TREASURY_ADDRESS,
-          String(leaseFeeSmallestUnits(file.size, duration))
-        ]
-      });
-      console.log("Platform fee hash:", feeResult.hash);
-
-      // Step 2: Encrypt the file here, before it leaves the browser.
+      // Step 1: Encrypt the file here, before it leaves the browser.
       //
       // Anyone can read a Shelby blob if they know its name, and the name is public on chain, so
       // the paywall depends on the bytes being unreadable rather than on the name being secret.
+      //
+      // This also has to come before the fee is paid. The fee is charged per megabyte of what
+      // gets stored, and the server recomputes it from the bytes it receives — so paying for the
+      // plaintext would fall short whenever the tag pushes the ciphertext into another chunk.
       setUploadStep("Encrypting the file with AES-256...");
       const plainBytes = new Uint8Array(await file.arrayBuffer());
       const key = await crypto.subtle.generateKey(
@@ -135,12 +127,29 @@ export default function FileUploadPage() {
       const aesKeyHex = bytesToHex(new Uint8Array(await crypto.subtle.exportKey("raw", key)));
       const aesIvHex = bytesToHex(iv);
 
+      const fileBytes = new Uint8Array(cipherBuffer);
+
+      // Step 2: Pay this application's fee, sized from the ciphertext the server will receive.
+      //
+      // This transfers the fungible asset through the framework's primary store rather than
+      // calling shelby_usd::transfer, which is restricted to the token's admin.
+      setUploadStep("Waiting for signature: platform fee...");
+      const feeResult = await signAndSubmitTransaction({
+        function: FUNGIBLE_TRANSFER_FUNCTION,
+        typeArguments: [FUNGIBLE_METADATA_TYPE],
+        functionArguments: [
+          SHELBY_USD_ASSET_TYPE,
+          LEASE_TREASURY_ADDRESS,
+          String(leaseFeeSmallestUnits(fileBytes.length, duration))
+        ]
+      });
+      console.log("Platform fee hash:", feeResult.hash);
+
       // Step 3: Work out Shelby's commitments for the ciphertext.
       //
       // The SDK erasure-codes the bytes and derives the merkle root the contract records. It has
       // to run on exactly the bytes that get uploaded, which is why encryption comes first.
       setUploadStep("Erasure coding the file and computing Shelby commitments...");
-      const fileBytes = new Uint8Array(cipherBuffer);
       const {
         createDefaultErasureCodingProvider,
         defaultErasureCodingConfig,
@@ -431,7 +440,7 @@ export default function FileUploadPage() {
                   <div className="flex justify-between text-xs">
                     <span className="text-white/60">Shelby storage, paid to the protocol:</span>
                     <span className="text-white font-bold font-mono">
-                      {(file ? shelbyStorageCost(file.size, duration) : 0).toFixed(8)} {SHELBY_USD_SYMBOL}
+                      {(file ? shelbyStorageCost(billableSize(), duration) : 0).toFixed(8)} {SHELBY_USD_SYMBOL}
                     </span>
                   </div>
 
