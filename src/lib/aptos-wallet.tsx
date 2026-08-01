@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { createContext, useContext, useState, useEffect, ReactNode } from "react";
+import React, { createContext, useContext, useState, useEffect, useRef, ReactNode } from "react";
+import { useToast } from "../components/Toaster";
 
 interface AptosWalletContextType {
   connected: boolean;
@@ -17,6 +18,14 @@ interface AptosWalletContextType {
   requestFaucet: () => void;
   availableWallets: string[];
   isDetected: (name: string) => boolean;
+  /** True once the wallet has signed the server's nonce and a session cookie is held. */
+  authenticated: boolean;
+  /** A sign-in round trip is in flight. */
+  signingIn: boolean;
+  /** Why the last sign-in attempt failed, if it did. */
+  authError: string | null;
+  /** Re-run the sign-in handshake for the connected wallet. */
+  signIn: () => Promise<boolean>;
 }
 
 const AptosWalletContext = createContext<AptosWalletContextType | undefined>(undefined);
@@ -548,6 +557,297 @@ const findAptosAddress = (obj: any, visited = new Set<any>()): string | null => 
   return null;
 };
 
+const bytesToHex = (bytes: Iterable<number>): string =>
+  "0x" +
+  Array.from(bytes)
+    .map((b: number) => b.toString(16).padStart(2, "0"))
+    .join("");
+
+// Wallets return signatures and public keys in a handful of shapes: hex strings, byte arrays,
+// or Aptos SDK class instances such as Ed25519Signature (which wraps a Hex, which wraps a
+// Uint8Array). Reduce any of them to a plain "0x..." hex string.
+const normalizeHex = (value: any): string | null => {
+  if (!value) return null;
+
+  if (typeof value === "string") {
+    const clean = value.trim();
+    if (/^0x[0-9a-fA-F]+$/.test(clean)) return clean.toLowerCase();
+    if (/^[0-9a-fA-F]+$/.test(clean)) return "0x" + clean.toLowerCase();
+    return null;
+  }
+
+  if (value instanceof Uint8Array || value?.constructor?.name === "Uint8Array") {
+    return bytesToHex(value as Uint8Array);
+  }
+
+  if (typeof value === "object") {
+    // Ed25519Signature, Ed25519PublicKey and Hex all expose this, and it is exact.
+    if (typeof value.toUint8Array === "function") {
+      try {
+        const bytes = value.toUint8Array();
+        if (bytes && bytes.length > 0) return bytesToHex(bytes);
+      } catch {}
+    }
+
+    try {
+      if (typeof value.toString === "function") {
+        const asString = value.toString();
+        if (asString && asString !== "[object Object]") {
+          const fromString = normalizeHex(asString);
+          if (fromString) return fromString;
+        }
+      }
+    } catch {}
+
+    for (const key of ["data", "value", "signature", "publicKey", "key", "hexString"]) {
+      try {
+        const nested = normalizeHex(value[key]);
+        if (nested) return nested;
+      } catch {}
+    }
+
+    if (Array.isArray(value) && value.length > 0) {
+      return normalizeHex(value[0]);
+    }
+  }
+
+  return null;
+};
+
+/**
+ * Dig the account's public key out of a provider. Petra's legacy `account()` includes it, and
+ * AIP-62 providers expose it on their account objects. The server needs it to confirm the key
+ * actually controls the address being claimed.
+ */
+const resolveWalletPublicKey = async (provider: any): Promise<string | null> => {
+  if (!provider) return null;
+
+  const fromAccountObject = (account: any): string | null => {
+    if (!account) return null;
+    if (Array.isArray(account)) return fromAccountObject(account[0]);
+    return normalizeHex(account.publicKey ?? account.public_key);
+  };
+
+  try {
+    const direct = fromAccountObject(provider.accounts) || fromAccountObject(provider.account);
+    if (direct) return direct;
+  } catch {}
+
+  try {
+    const key = normalizeHex(provider.publicKey);
+    if (key) return key;
+  } catch {}
+
+  // AIP-62 account feature
+  try {
+    const feature = provider.features?.["aptos:account"];
+    if (feature && typeof feature.account === "function") {
+      const key = fromAccountObject(await feature.account());
+      if (key) return key;
+    }
+  } catch {}
+
+  // Legacy account() call
+  try {
+    if (typeof provider.account === "function") {
+      const key = fromAccountObject(await provider.account());
+      if (key) return key;
+    }
+  } catch {}
+
+  return null;
+};
+
+/**
+ * Pull the transaction hash out of a submit response. AIP-62 wraps it as { status, args },
+ * legacy providers return it flat, and some return the hash as a bare string.
+ */
+const readTransactionHash = (result: any): string | null => {
+  if (!result) return null;
+
+  if (typeof result === "string") {
+    return /^0x[0-9a-fA-F]{1,64}$/.test(result.trim()) ? result.trim() : null;
+  }
+
+  const status = result.status;
+  if (typeof status === "string" && status.toLowerCase() === "rejected") return null;
+
+  const body = result.args || result;
+  for (const key of ["hash", "transactionHash", "txnHash", "tx_hash"]) {
+    const candidate = body?.[key];
+    if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+  }
+
+  return null;
+};
+
+/** The network this app is built against. Signing anywhere else is refused. */
+const EXPECTED_CHAIN_ID = 2; // Aptos testnet
+const EXPECTED_NETWORK_NAME = "testnet";
+
+/** Node API used for read-only lookups such as balances. */
+const APTOS_FULLNODE_URL = "https://fullnode.testnet.aptoslabs.com/v1";
+
+/**
+ * ShelbyUSD on Aptos testnet, as published by the fungible asset registry:
+ * name "ShelbyUSD", symbol "SHELBY_USD", 8 decimals.
+ */
+const SHELBY_USD_ASSET_TYPE =
+  "0x1b18363a9f1fe5e6ebf247daba5cc1c18052bb232efdc4c50f556053922d98e1";
+const SHELBY_USD_DECIMALS = 8;
+
+/**
+ * Call a read-only Move view and return its first return value, or null if the node refused.
+ */
+const callView = async (
+  fn: string,
+  typeArguments: string[],
+  args: unknown[]
+): Promise<string | null> => {
+  const response = await fetch(`${APTOS_FULLNODE_URL}/view`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ function: fn, type_arguments: typeArguments, arguments: args })
+  });
+
+  if (!response.ok) {
+    console.warn(
+      `[Circle Storage] View ${fn} returned HTTP ${response.status}.`,
+      await response.text().catch(() => "")
+    );
+    return null;
+  }
+
+  const [value] = await response.json();
+  return value === undefined || value === null ? null : String(value);
+};
+
+/** Read the wallet's current network across the standard and legacy shapes. */
+const readWalletNetwork = async (provider: any): Promise<{ name?: string; chainId?: number } | null> => {
+  const parse = (value: any): { name?: string; chainId?: number } | null => {
+    if (!value) return null;
+    if (typeof value === "string") return { name: value.toLowerCase() };
+    const name = typeof value.name === "string" ? value.name.toLowerCase() : undefined;
+    const rawChain = value.chainId ?? value.chain_id;
+    const chainId = rawChain === undefined || rawChain === null ? undefined : Number(rawChain);
+    if (name === undefined && chainId === undefined) return null;
+    return { name, chainId };
+  };
+
+  const feature = provider?.features?.["aptos:network"] || provider?.features?.["aptos:getNetwork"];
+  if (feature) {
+    for (const fn of [feature.network, feature.getNetwork]) {
+      if (typeof fn === "function") {
+        try {
+          const parsed = parse(await fn.call(feature));
+          if (parsed) return parsed;
+        } catch {}
+      }
+    }
+  }
+
+  for (const fnName of ["network", "getNetwork"]) {
+    try {
+      if (typeof provider?.[fnName] === "function") {
+        const parsed = parse(await provider[fnName]());
+        if (parsed) return parsed;
+      }
+    } catch {}
+  }
+
+  try {
+    const parsed = parse(provider?.network);
+    if (parsed) return parsed;
+  } catch {}
+
+  return null;
+};
+
+/**
+ * Throw unless the wallet is on the expected network.
+ *
+ * When the network cannot be read at all we proceed with a warning rather than blocking, since
+ * not every provider exposes it — meaning this guard reduces the risk of a mainnet transfer
+ * but cannot rule it out for wallets that stay silent about their network.
+ */
+const assertExpectedNetwork = async (provider: any): Promise<void> => {
+  const network = await readWalletNetwork(provider);
+
+  if (!network) {
+    console.warn(
+      "[Circle Storage] Wallet did not report its network; proceeding without a network check."
+    );
+    return;
+  }
+
+  const nameMatches = network.name ? network.name.includes(EXPECTED_NETWORK_NAME) : undefined;
+  const chainMatches =
+    network.chainId === undefined ? undefined : network.chainId === EXPECTED_CHAIN_ID;
+
+  if (nameMatches === false || chainMatches === false) {
+    const reported = network.name || `chain ${network.chainId}`;
+    throw new Error(
+      `Your wallet is connected to ${reported}, but Circle Storage runs on Aptos testnet. ` +
+        `Switch the network in your wallet before signing, otherwise you could move real funds.`
+    );
+  }
+};
+
+/**
+ * Turn whatever a wallet or the network threw into something a user can act on.
+ *
+ * Wallets reject with plain objects, numeric codes, or strings as often as with real Errors, so
+ * `err.message` is frequently empty — and reporting "sign-in failed" with no reason hides the
+ * one detail needed to fix it.
+ */
+const describeError = (err: any): string => {
+  if (!err) return "Wallet sign-in failed for an unknown reason.";
+  if (typeof err === "string") return err;
+
+  if (err.message) {
+    // Petra reports a declined request as code 4001.
+    return err.code ? `${err.message} (code ${err.code})` : String(err.message);
+  }
+
+  if (err.code === 4001) return "You declined the signature request in your wallet.";
+  if (err.code) return `Wallet returned error code ${err.code}.`;
+  if (err.name) return `Wallet sign-in failed: ${err.name}.`;
+
+  try {
+    const asJson = JSON.stringify(err);
+    if (asJson && asJson !== "{}") return `Wallet sign-in failed: ${asJson.slice(0, 200)}`;
+  } catch {}
+
+  return "Wallet sign-in failed and the wallet gave no reason. See the browser console.";
+};
+
+/** Compare two Aptos addresses, which may be written with different zero padding. */
+const sameAddress = (a: string, b: string): boolean => {
+  const normalize = (value: string) =>
+    value.trim().toLowerCase().replace(/^0x/, "").padStart(64, "0");
+  return normalize(a) === normalize(b);
+};
+
+const truncate = (address: string): string =>
+  address.length > 12 ? `${address.slice(0, 6)}…${address.slice(-4)}` : address;
+
+/** Locate the wallet's signMessage entry point, standard first then legacy. */
+const getSignMessageFn = (provider: any): ((input: any) => Promise<any>) | null => {
+  if (!provider) return null;
+
+  const feature =
+    provider.features?.["aptos:signMessage"] || provider.features?.["standard:signMessage"];
+  if (feature && typeof feature.signMessage === "function") {
+    return (input: any) => feature.signMessage(input);
+  }
+
+  if (typeof provider.signMessage === "function") {
+    return (input: any) => provider.signMessage(input);
+  }
+
+  return null;
+};
+
 export function AptosWalletProvider({ children }: { children: ReactNode }) {
   const [address, setAddress] = useState<string | null>(null);
   const [connected, setConnected] = useState<boolean>(false);
@@ -555,9 +855,205 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
   const [balance, setBalance] = useState<number>(0.00); 
   const [shelbyUSDBalance, setShelbyUSDBalance] = useState<number>(0.00); 
   const [availableWallets, setAvailableWallets] = useState<string[]>([]);
+  const [authenticated, setAuthenticated] = useState<boolean>(false);
+  const [signingIn, setSigningIn] = useState<boolean>(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const toast = useToast();
+
+  // The public key that came back with the connection, needed so the server can tie the
+  // signature to the claimed address.
+  const publicKeyRef = useRef<string | null>(null);
 
   const isDetected = (name: string): boolean => {
     return checkWalletDetected(name);
+  };
+
+  /**
+   * Prove control of the address to the server: fetch a nonce, have the wallet sign it, and
+   * exchange the signature for a session cookie. Until this succeeds the API rejects every
+   * write and every download.
+   */
+  const establishSession = async (
+    targetAddress: string,
+    targetWalletName: string,
+    publicKey: string | null
+  ): Promise<boolean> => {
+    setSigningIn(true);
+    setAuthError(null);
+
+    try {
+      const nonceRes = await fetch("/api/auth/nonce", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ address: targetAddress })
+      });
+
+      if (!nonceRes.ok) {
+        const details = await nonceRes.json().catch(() => ({}));
+        throw new Error(details.error || "Server refused to issue a sign-in nonce.");
+      }
+
+      const { nonce, message } = await nonceRes.json();
+
+      const provider = getWalletProvider(targetWalletName) || getLegacyProvider(targetWalletName);
+      const signMessage = getSignMessageFn(provider);
+      if (!signMessage) {
+        throw new Error(
+          `${targetWalletName} does not expose a signMessage method, so ownership of the ` +
+            `address cannot be proven. Try a wallet that supports the Aptos wallet standard.`
+        );
+      }
+
+      const signed = await signMessage({
+        message,
+        nonce,
+        address: true,
+        application: true,
+        chainId: true
+      });
+
+      // AIP-62 wraps the result as { status, args }, while legacy providers return the fields
+      // flat. Unwrap before reading anything out of it.
+      const status = signed?.status;
+      if (typeof status === "string" && status.toLowerCase() === "rejected") {
+        throw new Error("You declined the sign-in signature request.");
+      }
+      const signedArgs = signed?.args || signed;
+
+      const signature = normalizeHex(signedArgs?.signature);
+      const fullMessage: string = signedArgs?.fullMessage || signedArgs?.full_message || "";
+      const resolvedKey =
+        publicKey ||
+        normalizeHex(signedArgs?.publicKey) ||
+        (await resolveWalletPublicKey(provider));
+
+      if (!signature || !fullMessage || !resolvedKey) {
+        // Log the actual shape so an unfamiliar wallet response can be diagnosed quickly.
+        console.error("[Circle Storage] Unusable signMessage response:", {
+          topLevelKeys: signed ? Object.keys(signed) : null,
+          argKeys: signedArgs ? Object.keys(signedArgs) : null,
+          signatureType: signedArgs?.signature?.constructor?.name,
+          haveSignature: !!signature,
+          haveFullMessage: !!fullMessage,
+          havePublicKey: !!resolvedKey,
+          raw: signed
+        });
+      }
+
+      if (!signature) throw new Error("Wallet returned a signature in an unrecognised format.");
+      if (!fullMessage) throw new Error("Wallet did not return the signed payload.");
+      if (!resolvedKey) throw new Error("Could not determine the wallet's public key.");
+
+      const verifyRes = await fetch("/api/auth/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          address: targetAddress,
+          publicKey: resolvedKey,
+          signature,
+          fullMessage,
+          nonce
+        })
+      });
+
+      if (!verifyRes.ok) {
+        const details = await verifyRes.json().catch(() => ({}));
+        throw new Error(details.message || "Server rejected the wallet signature.");
+      }
+
+      setAuthenticated(true);
+      return true;
+    } catch (err: any) {
+      console.error("[Circle Storage] Wallet sign-in failed:", err);
+      setAuthenticated(false);
+      setAuthError(describeError(err));
+      return false;
+    } finally {
+      setSigningIn(false);
+    }
+  };
+
+  /**
+   * Adopt the account the wallet has switched to.
+   *
+   * The old session belongs to the previous address, so it is dropped rather than left to fail
+   * server-side checks later. The user signs in again, deliberately, as whoever they now are.
+   */
+  const handleAccountChange = async (newAddress: string) => {
+    if (address && sameAddress(newAddress, address)) return;
+
+    console.log(`[Circle Storage] Wallet switched account to ${newAddress}`);
+    setAddress(newAddress);
+    setAuthenticated(false);
+    setAuthError(null);
+    publicKeyRef.current = null;
+    localStorage.setItem("aptos_wallet_address", newAddress);
+
+    await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+    toast.info(`Wallet switched to ${truncate(newAddress)}. Sign in again to continue.`);
+  };
+
+  // Follow the wallet's own account switches, so the app does not keep acting as an account the
+  // user has moved away from.
+  useEffect(() => {
+    if (!walletName) return;
+
+    const provider = getWalletProvider(walletName) || getLegacyProvider(walletName);
+    const feature = provider?.features?.["aptos:onAccountChange"];
+    if (!feature || typeof feature.onAccountChange !== "function") return;
+
+    let unsubscribe: (() => void) | undefined;
+    try {
+      unsubscribe = feature.onAccountChange(async (account: any) => {
+        const next = extractAddress(account) || (await probeInstanceForAddress(account));
+        if (next) await handleAccountChange(next);
+      });
+    } catch (err) {
+      console.warn("[Circle Storage] Could not subscribe to wallet account changes:", err);
+    }
+
+    return () => {
+      try {
+        unsubscribe?.();
+      } catch {}
+    };
+  }, [walletName, address]);
+
+  const signIn = async (): Promise<boolean> => {
+    if (!walletName) {
+      setAuthError("Connect a wallet before signing in.");
+      return false;
+    }
+
+    // A reload restores the remembered address but not the wallet connection, so the provider
+    // has no account to sign with and no public key to offer. Reconnect in that case rather
+    // than failing — otherwise the only way through is to disconnect and start again, which
+    // nobody should have to work out for themselves.
+    const provider = getWalletProvider(walletName) || getLegacyProvider(walletName);
+    const key = publicKeyRef.current || (await resolveWalletPublicKey(provider));
+
+    if (!address || !key) {
+      return connect(walletName);
+    }
+
+    // Sign in as whoever the wallet currently is. If it has switched accounts since we last
+    // looked, signing with the remembered address would produce a payload naming a different
+    // one, which the server refuses — so adopt the active account instead of failing.
+    const activeAddress = await probeInstanceForAddress(provider);
+    if (activeAddress && !sameAddress(activeAddress, address)) {
+      console.log(
+        `[Circle Storage] Signing in as the wallet's current account ${activeAddress}, ` +
+          `not the remembered ${address}`
+      );
+      setAddress(activeAddress);
+      localStorage.setItem("aptos_wallet_address", activeAddress);
+      const activeKey = (await resolveWalletPublicKey(provider)) || key;
+      publicKeyRef.current = activeKey;
+      return establishSession(activeAddress, walletName, activeKey);
+    }
+
+    publicKeyRef.current = key;
+    return establishSession(address, walletName, key);
   };
 
   // Detect injected web3 options on load
@@ -613,27 +1109,32 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
       window.addEventListener("circle-storage-wallet-registered", detectInjectedWallets);
     }
 
-    // Retrieve previous connected wallet session
+    // Restore a previous session. The server is the authority on which address is signed in;
+    // localStorage only remembers which wallet to talk to.
     const savedAddress = localStorage.getItem("aptos_wallet_address");
     const savedWallet = localStorage.getItem("aptos_wallet_name");
+
+    fetch("/api/auth/session")
+      .then(res => (res.ok ? res.json() : null))
+      .then(session => {
+        if (session?.address) {
+          setAddress(session.address);
+          setConnected(true);
+          setAuthenticated(true);
+          if (savedWallet) setWalletName(savedWallet);
+        } else {
+          // A remembered address without a valid session is not signed in.
+          setAuthenticated(false);
+        }
+      })
+      .catch(() => setAuthenticated(false));
+
     if (savedAddress && savedWallet) {
       setAddress(savedAddress);
       setConnected(true);
       setWalletName(savedWallet);
-      
-      const savedBalance = localStorage.getItem(`aptos_wallet_balance_${savedAddress}`);
-      const savedShelby = localStorage.getItem(`aptos_wallet_shelby_balance_${savedAddress}`);
-      if (savedBalance) {
-        setBalance(parseFloat(savedBalance));
-      } else {
-        setBalance(0.00);
-      }
-      if (savedShelby) {
-        setShelbyUSDBalance(parseFloat(savedShelby));
-      } else {
-        setShelbyUSDBalance(250.00);
-        localStorage.setItem(`aptos_wallet_shelby_balance_${savedAddress}`, "250.00");
-      }
+
+      // Both balances are read from chain by the effect below, so nothing is restored here.
     }
 
     return () => {
@@ -645,37 +1146,53 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  // Sync real-time testnet balances when a live Web3 wallet is connected
+  /**
+   * Read both balances from chain. These are the only writers of `balance` and
+   * `shelbyUSDBalance`: neither is ever adjusted locally, so what the UI shows is what the
+   * account actually holds.
+   *
+   * APT is read through the `0x1::coin::balance` view rather than by looking for a
+   * `0x1::coin::CoinStore<AptosCoin>` resource. Since APT migrated to the fungible asset
+   * standard, funded accounts generally carry no CoinStore at all, so scanning resources
+   * reports zero for them; the view covers both the legacy store and the migrated balance.
+   *
+   * ShelbyUSD is a fungible asset, so it is read from its primary store. Accounts that hold
+   * none answer "0" rather than failing, so an absent store needs no special case.
+   *
+   * A failed lookup leaves the previous figure in place instead of flashing a misleading zero.
+   */
+  const refreshOnChainBalance = async (targetAddress: string | null) => {
+    if (!targetAddress) return;
+
+    const [apt, shelby] = await Promise.all([
+      callView("0x1::coin::balance", ["0x1::aptos_coin::AptosCoin"], [targetAddress]).catch(
+        (error) => {
+          console.warn("[Circle Storage] Could not read the on-chain APT balance:", error);
+          return null;
+        }
+      ),
+      callView(
+        "0x1::primary_fungible_store::balance",
+        ["0x1::fungible_asset::Metadata"],
+        [targetAddress, SHELBY_USD_ASSET_TYPE]
+      ).catch((error) => {
+        console.warn("[Circle Storage] Could not read the on-chain ShelbyUSD balance:", error);
+        return null;
+      })
+    ]);
+
+    if (apt !== null) {
+      setBalance(Number(apt) / 100_000_000);
+    }
+    if (shelby !== null) {
+      setShelbyUSDBalance(Number(shelby) / 10 ** SHELBY_USD_DECIMALS);
+    }
+  };
+
+  // Keep the displayed balance in step with the connected account
   useEffect(() => {
     if (connected && address) {
-      const fetchOnChainBalances = async () => {
-        try {
-          // Query Aptos Testnet Node API for true APT CoinStore resources
-          const response = await fetch(`https://fullnode.testnet.aptoslabs.com/v1/accounts/${address}/resources`);
-          if (response.ok) {
-            const resources = await response.json();
-            const coinStore = resources.find(
-              (res: any) => res.type === "0x1::coin::CoinStore<0x1::aptos_coin::AptosCoin>"
-            );
-            if (coinStore && coinStore.data && coinStore.data.coin) {
-              const octas = parseFloat(coinStore.data.coin.value);
-              const actualApt = octas / 100_000_000; // 10^8 Octas = 1 APT
-              setBalance(actualApt);
-              localStorage.setItem(`aptos_wallet_balance_${address}`, actualApt.toString());
-            } else {
-              setBalance(0.00);
-              localStorage.setItem(`aptos_wallet_balance_${address}`, "0");
-            }
-          } else if (response.status === 404) {
-            setBalance(0.00);
-            localStorage.setItem(`aptos_wallet_balance_${address}`, "0");
-          }
-        } catch (error) {
-          console.warn("[Circle Storage] Could not fetch real on-chain balance from Aptos Testnet node:", error);
-        }
-      };
-      
-      fetchOnChainBalances();
+      refreshOnChainBalance(address);
     } else {
       setBalance(0.00);
       setShelbyUSDBalance(0.00);
@@ -979,22 +1496,22 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
       localStorage.setItem("aptos_wallet_address", walletAddress);
       localStorage.setItem("aptos_wallet_name", cleanName);
 
-      // Load balances safely
-      const savedBalance = localStorage.getItem(`aptos_wallet_balance_${walletAddress}`);
-      const savedShelby = localStorage.getItem(`aptos_wallet_shelby_balance_${walletAddress}`);
+      // Balances are whatever the chain says, so read them rather than seeding figures.
+      await refreshOnChainBalance(walletAddress);
 
-      const finalBal = savedBalance ? parseFloat(savedBalance) : 10.0;
-      const finalShelby = savedShelby ? parseFloat(savedShelby) : 250.00;
+      // Capture the public key while the provider is still in hand: the server needs it to
+      // check that this key really controls the address we just resolved.
+      publicKeyRef.current =
+        (await resolveWalletPublicKey(provider)) || (await resolveWalletPublicKey(legacyProvider));
 
-      setBalance(finalBal);
-      setShelbyUSDBalance(finalShelby);
+      // Connecting alone grants nothing server-side; the signature does.
+      await establishSession(walletAddress, cleanName, publicKeyRef.current);
 
-      localStorage.setItem(`aptos_wallet_balance_${walletAddress}`, finalBal.toString());
-      localStorage.setItem(`aptos_wallet_shelby_balance_${walletAddress}`, finalShelby.toString());
       return true;
     } catch (err: any) {
       console.error(`[Circle Storage] Failed to connect to actual wallet extension ${name}:`, err);
-      alert(`Could not connect to ${name}: ${err?.message || "User declined the wallet signature request."}`);
+      setAuthError(describeError(err));
+      toast.error(`Could not connect to ${name}: ${describeError(err)}`);
       return false;
     }
   };
@@ -1005,79 +1522,122 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
     setWalletName(null);
     setBalance(0.00);
     setShelbyUSDBalance(0.00);
+    setAuthenticated(false);
+    setAuthError(null);
+    publicKeyRef.current = null;
     localStorage.removeItem("aptos_wallet_address");
     localStorage.removeItem("aptos_wallet_name");
+
+    // Drop the server session too, otherwise the cookie outlives the disconnect.
+    fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
   };
 
-  // Sign and submit a transaction payload to testnet or generate receipt proof
+  // Submit a transaction through the connected wallet. There is no fallback: if the wallet
+  // cannot or will not sign, this throws, because a fabricated hash would be indistinguishable
+  // from a real receipt to anything downstream.
   const signAndSubmitTransaction = async (payload: any): Promise<{ hash: string }> => {
     console.log("[Circle Storage] Submitting transaction payload to extension:", payload);
-    
+
     if (!address) {
       throw new Error("No connected wallet found for signing transaction.");
     }
+    if (!walletName) {
+      throw new Error("No wallet is connected to sign this transaction.");
+    }
 
-    // Check if the buyer has sufficient balance
     if (payload.amount && balance < payload.amount) {
-      throw new Error(`Insufficient funds: transaction needs ${payload.amount} APT, but wallet balance is ${balance.toFixed(2)} APT.`);
+      throw new Error(
+        `Insufficient funds: transaction needs ${payload.amount} APT, but the wallet holds ${balance.toFixed(4)} APT.`
+      );
     }
 
-    // Deduct standard pricing
-    if (payload.amount) {
-      const newBal = Math.max(0, balance - payload.amount);
-      setBalance(newBal);
-      localStorage.setItem(`aptos_wallet_balance_${address}`, newBal.toString());
+    const provider = getWalletProvider(walletName) || getLegacyProvider(walletName);
+    if (!provider) {
+      throw new Error(`Lost the connection to ${walletName}. Reconnect the wallet and retry.`);
     }
 
-    // Generate fall-back/standard random seed receipt hash
-    const array = new Uint8Array(32);
-    crypto.getRandomValues(array);
-    const hex = Array.from(array, byte => byte.toString(16).padStart(2, "0")).join("");
-    const finalHash = "0x" + hex;
-    
-    if (walletName) {
-      try {
-        const provider = getWalletProvider(walletName);
-        if (provider) {
-          // 1. Try Aptos Wallet Standard (AIP-62) signAndSubmitTransaction
-          const signFeature = provider.features?.['aptos:signAndSubmitTransaction'] || provider.features?.['standard:signAndSubmitTransaction'];
-          if (signFeature) {
-            console.log(`[Circle Storage] Signing transaction via AIP-62 feature on ${walletName}...`);
-            // Map keys layout to guarantee both camelCase and snake_case entry structures
-            const standardPayload = {
-              function: payload.function,
-              typeArguments: payload.typeArguments || payload.type_arguments || [],
-              arguments: payload.arguments || []
-            };
-            const result = await signFeature.signAndSubmitTransaction({
-              payload: standardPayload
-            });
-            return { hash: result?.hash || result || finalHash };
-          } 
-          // 2. Try legacy signAndSubmitTransaction call
-          else if (typeof provider.signAndSubmitTransaction === "function") {
-            console.log(`[Circle Storage] Signing transaction via legacy API on ${walletName}...`);
-            const result = await provider.signAndSubmitTransaction(payload);
-            return { hash: result?.hash || result || finalHash };
-          }
+    // Refuse to sign anywhere but the network this app targets, so a wallet left on mainnet
+    // cannot move real funds.
+    await assertExpectedNetwork(provider);
+
+    // The wallet signs with whichever account it currently has selected. If that is no longer
+    // the one this session belongs to, the server rightly rejects the result — as "transaction
+    // was not sent by the paying wallet" — after the user has already paid gas. Catch it first.
+    const activeAddress = await probeInstanceForAddress(provider);
+    if (activeAddress && !sameAddress(activeAddress, address)) {
+      await handleAccountChange(activeAddress);
+      throw new Error(
+        `Your wallet has switched to ${truncate(activeAddress)}, but this session belongs to ` +
+          `${truncate(address)}. Sign in again with the account you want to use.`
+      );
+    }
+
+    try {
+      // 1. Aptos Wallet Standard (AIP-62). The standard names the field functionArguments;
+      // sending `arguments` leaves the wallet with no arguments to encode.
+      const signFeature =
+        provider.features?.["aptos:signAndSubmitTransaction"] ||
+        provider.features?.["standard:signAndSubmitTransaction"];
+
+      if (signFeature) {
+        console.log(`[Circle Storage] Signing transaction via AIP-62 feature on ${walletName}...`);
+        const args = payload.functionArguments || payload.arguments || [];
+        const typeArguments = payload.typeArguments || payload.type_arguments || [];
+        const result = await signFeature.signAndSubmitTransaction({
+          payload: {
+            function: payload.function,
+            typeArguments,
+            functionArguments: args
+          },
+          // Registering a Shelby blob needs a higher gas ceiling than the wallet's default.
+          ...(payload.options ? { gasUnitPrice: payload.options.gasUnitPrice,
+                                  maxGasAmount: payload.options.maxGasAmount } : {})
+        });
+
+        const hash = readTransactionHash(result);
+        if (!hash) {
+          console.error("[Circle Storage] Unusable signAndSubmitTransaction response:", result);
+          throw new Error("Wallet did not return a transaction hash.");
         }
-      } catch (err: any) {
-        console.warn("[Circle Storage] Direct extension transaction submission failed or declined:", err);
-        throw new Error(err?.message || "Aptos transaction signing rejected by user.");
+        await refreshOnChainBalance(address);
+        return { hash };
       }
+
+      // 2. Legacy providers take the original entry_function_payload shape.
+      if (typeof provider.signAndSubmitTransaction === "function") {
+        console.log(`[Circle Storage] Signing transaction via legacy API on ${walletName}...`);
+        const result = await provider.signAndSubmitTransaction({
+          type: "entry_function_payload",
+          function: payload.function,
+          type_arguments: payload.typeArguments || payload.type_arguments || [],
+          arguments: payload.functionArguments || payload.arguments || []
+        });
+
+        const hash = readTransactionHash(result);
+        if (!hash) {
+          console.error("[Circle Storage] Unusable legacy transaction response:", result);
+          throw new Error("Wallet did not return a transaction hash.");
+        }
+        await refreshOnChainBalance(address);
+        return { hash };
+      }
+    } catch (err: any) {
+      console.warn("[Circle Storage] Transaction submission failed or was declined:", err);
+      throw new Error(err?.message || "The wallet rejected this transaction.");
     }
 
-    return { hash: `0x_mock_tx_${hex.slice(0, 32)}` };
+    throw new Error(`${walletName} does not expose a way to submit transactions.`);
   };
 
+  // Balances come from chain, so there is nothing local to top up. Point at the real faucet
+  // and re-read the balance instead of inventing one.
   const requestFaucet = () => {
     if (!address) {
-      alert("Please connect your wallet first.");
+      toast.info("Connect your wallet first.");
       return;
     }
-    const newBal = balance + 5.0;
-    setBalance(newBal);
-    localStorage.setItem(`aptos_wallet_balance_${address}`, newBal.toString());
+    window.open(`https://aptos.dev/network/faucet?address=${address}`, "_blank", "noopener");
+    refreshOnChainBalance(address);
   };
 
   return (
@@ -1094,6 +1654,10 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
         requestFaucet,
         availableWallets,
         isDetected,
+        authenticated,
+        signingIn,
+        authError,
+        signIn,
       }}
     >
       {children}

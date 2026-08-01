@@ -6,3 +6,9 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Local JSON fallback store: runtime data, not source
+server-db.json
+
+# Per-machine tool permissions; launch.json next to it is shared on purpose
+.claude/settings.local.json

@@ -3,14 +3,39 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import "dotenv/config";
 import express from "express";
+import cookieParser from "cookie-parser";
 import path from "path";
 import fs from "fs";
+import crypto from "crypto";
 import { createServer as createViteServer } from "vite";
 import { createClient } from "@supabase/supabase-js";
 import { UserProfile, FileMetadata, PurchaseRecord, LeaderboardRow } from "./src/types";
+import {
+  SESSION_COOKIE,
+  SESSION_COOKIE_OPTIONS,
+  buildSignInMessage,
+  createNonce,
+  issueSessionToken,
+  normalizeAddress,
+  requireAuth,
+  sessionAddress,
+  verifyWalletSignature,
+} from "./auth";
+import { simulatedPaymentsAllowed, verifyAptPayment, verifyShelbyUsdPayment } from "./payments";
+import {
+  LEASE_TREASURY_ADDRESS,
+  buildBlobName,
+  isLeaseDuration,
+  leaseExpirationMicros,
+  leaseFeeSmallestUnits,
+} from "./src/shelby";
+import { getBlobBytes, putBlobBytes, verifyBlobRegistration } from "./shelby-storage";
+import { isValidIvHex, isValidKeyHex } from "./src/encryption";
+import { decryptStoredFile, isEncrypted } from "./file-payload";
 
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 const DB_FILE = path.join(process.cwd(), "server-db.json");
 
 // Initialize Supabase if environment variables are provided, otherwise fallback to local JSON database gracefully
@@ -35,8 +60,12 @@ interface DatabaseSchema {
   files: {
     [id: string]: FileMetadata & {
       aes_key: string;
+      aes_iv: string;
       file_data: string; // Encrypted file payload (Base64)
       content_type: string;
+      lease_tx: string; // Hash of the verified ShelbyUSD lease payment
+      /** Address the Shelby blob is stored under; empty when the bytes are held locally. */
+      shelby_owner: string;
     };
   };
   purchases: PurchaseRecord[];
@@ -74,8 +103,111 @@ function saveDatabase(db: DatabaseSchema) {
 async function startServer() {
   const app = express();
   app.use(express.json({ limit: "50mb" }));
+  app.use(cookieParser());
 
   const db = loadDatabase();
+
+  /** True when a lease payment has already been spent on an earlier upload. */
+  const leaseTxAlreadyUsed = async (txHash: string): Promise<boolean> => {
+    if (supabase) {
+      try {
+        const { data } = await supabase
+          .from("files")
+          .select("id")
+          .eq("lease_tx", txHash)
+          .maybeSingle();
+        if (data) return true;
+      } catch (err) {
+        console.error("[Supabase DB Error] Lease reuse check failed:", err);
+        // Fall through to the local store rather than allowing an unchecked reuse.
+      }
+    }
+
+    return Object.values(db.files).some(f => f.lease_tx === txHash);
+  };
+
+  /**
+   * Produce the base64 payload for a download.
+   *
+   * Records written while Shelby storage was configured hold no bytes of their own, so the
+   * blob is fetched back from the network; older records still carry their own payload.
+   */
+  const resolveFilePayload = async (
+    file: {
+      shelby_owner?: string;
+      shelby_ref: string;
+      file_data?: string;
+      aes_key?: string;
+      aes_iv?: string;
+    }
+  ): Promise<{ data?: string; reason?: string }> => {
+    if (!file.shelby_owner) {
+      return { data: file.file_data || "" };
+    }
+
+    const read = await getBlobBytes({ account: file.shelby_owner, blobName: file.shelby_ref });
+    if (!read.ok) return { reason: read.reason };
+
+    // Files uploaded before encryption was added have no key and are stored as they were.
+    if (!isEncrypted(file)) {
+      return { data: read.data!.toString("base64") };
+    }
+
+    const plain = decryptStoredFile(read.data!, file.aes_key!, file.aes_iv!);
+    if (!plain.ok) return { reason: plain.reason };
+
+    return { data: plain.data!.toString("base64") };
+  };
+
+  // AUTH ROUTES
+  //
+  // Wallet ownership is established here and nowhere else. Every mutating route below reads
+  // the caller's address from the session cookie rather than from the request body.
+
+  // POST Issue a nonce for the wallet to sign
+  app.post("/api/auth/nonce", (req, res) => {
+    const address = normalizeAddress(String(req.body?.address || ""));
+    if (!address) {
+      return res.status(400).json({ error: "A valid Aptos address is required." });
+    }
+
+    const nonce = createNonce(address);
+    return res.json({ nonce, message: buildSignInMessage(nonce) });
+  });
+
+  // POST Verify the signed nonce and open a session
+  app.post("/api/auth/verify", async (req, res) => {
+    const { address, publicKey, signature, fullMessage, nonce } = req.body || {};
+
+    const result = await verifyWalletSignature({
+      address: String(address || ""),
+      publicKey: String(publicKey || ""),
+      signature: String(signature || ""),
+      fullMessage: String(fullMessage || ""),
+      nonce: String(nonce || ""),
+    });
+
+    if (!result.ok) {
+      console.warn(`[Circle Storage] Wallet sign-in rejected: ${result.reason}`);
+      return res.status(401).json({ error: "SIGNATURE_REJECTED", message: result.reason });
+    }
+
+    res.cookie(SESSION_COOKIE, issueSessionToken(result.address), SESSION_COOKIE_OPTIONS);
+    return res.json({ address: result.address });
+  });
+
+  // GET Current session, so the client can restore state without trusting localStorage
+  app.get("/api/auth/session", (req, res) => {
+    const address = sessionAddress(req);
+    if (!address) return res.status(401).json({ error: "UNAUTHENTICATED" });
+    return res.json({ address });
+  });
+
+  // POST Close the session
+  app.post("/api/auth/logout", (req, res) => {
+    res.clearCookie(SESSION_COOKIE, { ...SESSION_COOKIE_OPTIONS, maxAge: undefined });
+    return res.json({ success: true });
+  });
 
   // API ROUTES
 
@@ -135,17 +267,26 @@ async function startServer() {
     return res.json(Object.values(db.profiles));
   });
 
-  // POST Create/Update Profile
-  app.post("/api/profiles", async (req, res) => {
+  // POST Create/Update Profile — only ever writes the authenticated caller's own profile
+  app.post("/api/profiles", requireAuth, async (req, res) => {
     const profile: UserProfile = req.body;
-    if (!profile.wallet_address || !profile.username) {
+    if (!profile.username) {
       return res.status(400).json({ error: "Missing required profile parameters." });
     }
 
-    const cleanWallet = profile.wallet_address.toLowerCase();
+    const username = String(profile.username).trim();
+    if (username.length === 0 || username.length > 12) {
+      return res.status(400).json({ error: "Username must be between 1 and 12 characters." });
+    }
+    if (profile.bio && String(profile.bio).length > 100) {
+      return res.status(400).json({ error: "Bio must be at most 100 characters." });
+    }
+
+    // Ignore any wallet_address in the body: the session is the only source of identity.
+    const cleanWallet = req.walletAddress!;
     const finalProfile: UserProfile = {
       wallet_address: cleanWallet,
-      username: profile.username.trim(),
+      username,
       avatar_url: profile.avatar_url || `https://api.dicebear.com/7.x/bottts/svg?seed=${cleanWallet}`,
       bio: profile.bio || "",
       x_social: profile.x_social || "",
@@ -179,17 +320,29 @@ async function startServer() {
   });
 
   // GET FILES with optional filters (Marketplace vs Dashboard)
+  //
+  // Private listings are only ever returned to their own uploader. Anonymous callers and
+  // callers asking about somebody else's uploads see public listings only.
   app.get("/api/files", async (req, res) => {
-    const { visibility, uploader } = req.query;
+    const { uploader } = req.query;
+    const caller = sessionAddress(req);
+
+    const requestedUploader = uploader ? normalizeAddress(String(uploader)) : null;
+    if (uploader && !requestedUploader) {
+      return res.status(400).json({ error: "Malformed uploader address." });
+    }
+
+    // Only a caller asking about their own uploads may see private entries.
+    const includePrivate = requestedUploader !== null && requestedUploader === caller;
 
     if (supabase) {
       try {
         let query = supabase.from("files").select("*");
-        if (visibility === "public") {
+        if (!includePrivate) {
           query = query.eq("visibility", "public");
         }
-        if (uploader) {
-          query = query.eq("uploader", String(uploader).toLowerCase());
+        if (requestedUploader) {
+          query = query.eq("uploader", requestedUploader);
         }
 
         const { data: dbFiles, error: filesErr } = await query;
@@ -241,29 +394,140 @@ async function startServer() {
       };
     });
 
-    if (visibility === "public") {
+    if (!includePrivate) {
       fileList = fileList.filter(f => f.visibility === "public");
     }
 
-    if (uploader) {
-      const cleanUploader = String(uploader).toLowerCase();
-      fileList = fileList.filter(f => f.uploader.toLowerCase() === cleanUploader);
+    if (requestedUploader) {
+      fileList = fileList.filter(f => f.uploader.toLowerCase() === requestedUploader);
     }
 
     return res.json(fileList);
   });
 
-  // POST Upload storage file (stores encrypted data securely server-side)
-  app.post("/api/files/upload", async (req, res) => {
-    const { uploader, name, size, shelby_ref, price, visibility, duration, file_data, content_type } = req.body;
+  // POST Upload storage file — the uploader is always the authenticated caller
+  app.post("/api/files/upload", requireAuth, async (req, res) => {
+    const {
+      name, shelby_ref, price, visibility, duration, file_data, content_type, lease_tx,
+      blob_name, register_tx, aes_key, aes_iv
+    } = req.body;
 
-    if (!uploader || !name || !shelby_ref || !duration || !file_data) {
+    if (!name || !shelby_ref || !duration || !file_data) {
       return res.status(400).json({ error: "Missing required upload parameters." });
     }
 
-    const id = "file_" + Math.random().toString(36).substring(2, 11);
-    const cleanUploader = uploader.toLowerCase();
-    const aesKey = "aes_key_" + Math.random().toString(36).substring(2, 15);
+    if (visibility !== "public" && visibility !== "private") {
+      return res.status(400).json({ error: "Visibility must be either 'public' or 'private'." });
+    }
+
+    if (!isLeaseDuration(duration)) {
+      return res.status(400).json({ error: "Unsupported lease duration." });
+    }
+
+    const numericPrice = Number(price) || 0;
+    if (numericPrice < 0) {
+      return res.status(400).json({ error: "Price cannot be negative." });
+    }
+
+    // Trust the payload we actually received rather than a client-supplied size.
+    const actualSize = Buffer.byteLength(String(file_data), "base64");
+
+    const id = "file_" + crypto.randomUUID();
+    const cleanUploader = req.walletAddress!;
+    // The browser encrypts before uploading and hands over the key. Anything stored on Shelby
+    // has to arrive encrypted, or a paid file would sit there readable by the public.
+    const aesKey = String(aes_key || "");
+    const aesIv = String(aes_iv || "");
+
+    if (blob_name && (!isValidKeyHex(aesKey) || !isValidIvHex(aesIv))) {
+      return res.status(400).json({
+        error: "A Shelby upload must include the AES-256 key and nonce used to encrypt it.",
+      });
+    }
+
+    // Verify the storage lease was actually paid. The fee is recomputed here from the payload
+    // we received, so a client cannot declare its own price.
+    const requiredLeaseUnits = leaseFeeSmallestUnits(actualSize, duration);
+    const leaseTxHash = String(lease_tx || "");
+
+    if (!leaseTxHash) {
+      return res.status(400).json({ error: "Missing the storage lease payment transaction." });
+    }
+
+    if (await leaseTxAlreadyUsed(leaseTxHash)) {
+      return res.status(400).json({ error: "That lease payment has already been redeemed." });
+    }
+
+    const lease = await verifyShelbyUsdPayment({
+      txHash: leaseTxHash,
+      expectedSender: cleanUploader,
+      expectedRecipient: LEASE_TREASURY_ADDRESS,
+      minimumUnits: requiredLeaseUnits,
+    });
+
+    if (!lease.ok) {
+      if (simulatedPaymentsAllowed()) {
+        console.warn(
+          `[Circle Storage] ALLOW_SIMULATED_PAYMENTS is on — accepting unverified lease ` +
+            `payment for "${name}" (${lease.reason})`
+        );
+      } else {
+        console.warn(`[Circle Storage] Lease payment rejected for "${name}": ${lease.reason}`);
+        return res.status(400).json({
+          error: "LEASE_NOT_VERIFIED",
+          message: `Could not verify the storage lease payment: ${lease.reason}`,
+        });
+      }
+    }
+
+    // When the client registered a Shelby blob for this upload, transfer the bytes there and
+    // keep no local copy. `shelbyRef` becomes the real blob name and `shelbyOwner` the wallet
+    // that owns it. Uploads without a registration keep the previous behaviour of holding the
+    // bytes here, the same way the server falls back from Supabase to a local file.
+    let shelbyRef = String(shelby_ref);
+    let shelbyOwner = "";
+    let storedPayload = String(file_data);
+
+    if (blob_name || register_tx) {
+      if (!blob_name || !register_tx) {
+        return res.status(400).json({
+          error: "A Shelby upload needs both blob_name and register_tx.",
+        });
+      }
+
+      // The registration decides the owner and the name, so a client cannot claim a blob it
+      // did not register, or one registered by somebody else.
+      const registration = await verifyBlobRegistration({
+        txHash: String(register_tx),
+        expectedOwner: cleanUploader,
+        expectedBlobName: String(blob_name),
+      });
+
+      if (!registration.ok) {
+        console.warn(`[Circle Storage] Blob registration rejected: ${registration.reason}`);
+        return res.status(400).json({
+          error: "REGISTRATION_NOT_VERIFIED",
+          message: `Could not verify the Shelby blob registration: ${registration.reason}`,
+        });
+      }
+
+      const written = await putBlobBytes({
+        account: cleanUploader,
+        blobName: String(blob_name),
+        data: Buffer.from(storedPayload, "base64"),
+      });
+
+      if (!written.ok) {
+        return res.status(502).json({
+          error: "SHELBY_WRITE_FAILED",
+          message: `Could not store the file on Shelby: ${written.reason}`,
+        });
+      }
+
+      shelbyRef = String(blob_name);
+      shelbyOwner = cleanUploader;
+      storedPayload = "";
+    }
 
     if (supabase) {
       try {
@@ -288,15 +552,18 @@ async function startServer() {
           id,
           uploader: cleanUploader,
           name,
-          size: Number(size),
-          shelby_ref,
-          price: visibility === "private" ? 0 : Number(price) || 0,
+          size: actualSize,
+          shelby_ref: shelbyRef,
+          price: visibility === "private" ? 0 : numericPrice,
           visibility,
           duration,
           created_at: new Date().toISOString(),
           aes_key: aesKey,
-          file_data,
-          content_type: content_type || "application/octet-stream"
+          aes_iv: aesIv,
+          file_data: storedPayload,
+          content_type: content_type || "application/octet-stream",
+          lease_tx: leaseTxHash,
+          shelby_owner: shelbyOwner
         };
 
         const { error: insertError } = await supabase.from("files").insert(secureFilePayload);
@@ -305,7 +572,7 @@ async function startServer() {
           return res.status(500).json({ error: "Failed to upload file to Supabase instance." });
         }
 
-        return res.json({ id, status: "uploaded_success_registered", shelby_ref });
+        return res.json({ id, status: "uploaded_success_registered", shelby_ref: shelbyRef });
       } catch (err) {
         console.error("[Supabase DB Error] Fatal upload query loop:", err);
         return res.status(500).json({ error: "Connection error saving secure file registry." });
@@ -317,33 +584,37 @@ async function startServer() {
       id,
       uploader: cleanUploader,
       name,
-      size: Number(size),
-      shelby_ref,
-      price: visibility === "private" ? 0 : Number(price) || 0,
+      size: actualSize,
+      shelby_ref: shelbyRef,
+      price: visibility === "private" ? 0 : numericPrice,
       visibility,
       duration,
       created_at: new Date().toISOString(),
       aes_key: aesKey,
-      file_data,
-      content_type: content_type || "application/octet-stream"
+      aes_iv: aesIv,
+      file_data: storedPayload,
+      content_type: content_type || "application/octet-stream",
+      lease_tx: leaseTxHash,
+      shelby_owner: shelbyOwner
     };
 
     saveDatabase(db);
-    return res.json({ id, status: "uploaded_success_registered", shelby_ref });
+    return res.json({ id, status: "uploaded_success_registered", shelby_ref: shelbyRef });
   });
 
-  // POST Register & Validate On-chain purchases (Aptos client verifies)
-  app.post("/api/files/purchase", async (req, res) => {
-    const { file_id, buyer, tx_hash, amount } = req.body;
+  // POST Register & Validate On-chain purchases — the buyer is the authenticated caller
+  app.post("/api/files/purchase", requireAuth, async (req, res) => {
+    const { file_id, tx_hash } = req.body;
 
-    if (!file_id || !buyer || !tx_hash) {
+    if (!file_id || !tx_hash) {
       return res.status(400).json({ error: "Missing required transaction parameters." });
     }
 
-    const cleanBuyer = buyer.toLowerCase();
+    const cleanBuyer = req.walletAddress!;
 
-    // 1. Fetch Target File Listing
+    // 1. Fetch the listing, so price and payee come from our records rather than the client
     let targetPrice = 0;
+    let targetUploader = "";
     if (supabase) {
       try {
         const { data: targetFile, error: fileFetchError } = await supabase
@@ -355,7 +626,8 @@ async function startServer() {
         if (fileFetchError || !targetFile) {
           return res.status(404).json({ error: "File listing not found in Supabase." });
         }
-        targetPrice = targetFile.price;
+        targetPrice = Number(targetFile.price) || 0;
+        targetUploader = String(targetFile.uploader);
 
         const { data: existingTx } = await supabase
           .from("purchases")
@@ -369,13 +641,15 @@ async function startServer() {
 
       } catch (err) {
         console.error("[Supabase DB Error] Verification mapping error", err);
+        return res.status(500).json({ error: "Could not load the listing to verify payment against." });
       }
     } else {
       const targetFile = db.files[file_id];
       if (!targetFile) {
         return res.status(404).json({ error: "File listing not found." });
       }
-      targetPrice = targetFile.price;
+      targetPrice = Number(targetFile.price) || 0;
+      targetUploader = targetFile.uploader;
 
       const exists = db.purchases.some(p => p.tx_hash === tx_hash);
       if (exists) {
@@ -383,45 +657,40 @@ async function startServer() {
       }
     }
 
-    // Server-side verification routine
-    let verified = false;
+    if (cleanBuyer === targetUploader.toLowerCase()) {
+      return res.status(400).json({ error: "You already own this file as its uploader." });
+    }
 
-    // Phase 1: Try on-chain lookup using Aptos Testnet Fullnode
-    try {
-      const response = await fetch(`https://fullnode.testnet.aptoslabs.com/v1/transactions/by_hash/${tx_hash}`);
-      if (response.ok) {
-        const txData = await response.json();
-        
-        // Confirm transaction status is success
-        if (txData && txData.success === true) {
-          const sender = txData.sender.toLowerCase();
-          console.log(`Verified transaction ${tx_hash} on-chain. Sender: ${sender}`);
-          verified = true;
-        }
+    // 2. Verify the payment against the chain: right sender, right payee, enough APT.
+    const payment = await verifyAptPayment({
+      txHash: String(tx_hash),
+      expectedSender: cleanBuyer,
+      expectedRecipient: targetUploader,
+      minimumApt: targetPrice,
+    });
+
+    if (!payment.ok) {
+      if (simulatedPaymentsAllowed()) {
+        console.warn(
+          `[Circle Storage] ALLOW_SIMULATED_PAYMENTS is on — accepting unverified payment ` +
+            `for ${file_id} (${payment.reason})`
+        );
+      } else {
+        console.warn(`[Circle Storage] Payment rejected for ${file_id}: ${payment.reason}`);
+        return res.status(400).json({
+          error: "PAYMENT_NOT_VERIFIED",
+          message: `Could not verify this payment on chain: ${payment.reason}`,
+        });
       }
-    } catch (err) {
-      console.warn("Aptos Node unreachable or request rate-limited. Proceeding to safe fallback validator.", err);
     }
 
-    // Phase 2: High-fidelity mock/sandbox verification if on-chain RPC fails or mock hashing is used
-    if (!verified) {
-      if (tx_hash.startsWith("0x_mock_") || tx_hash.length >= 64) {
-        console.log(`Validating simulated/sandbox wallet transaction receipt: ${tx_hash}`);
-        verified = true;
-      }
-    }
-
-    if (!verified) {
-      return res.status(400).json({ error: "Failed to verify payment on Aptos Testnet explorer. Ensure transaction is successful." });
-    }
-
-    const purchaseId = "purchase_" + Math.random().toString(36).substring(2, 11);
     const record: PurchaseRecord = {
-      id: purchaseId,
+      id: "purchase_" + crypto.randomUUID(),
       file_id,
       buyer: cleanBuyer,
       tx_hash,
-      amount: Number(amount) || targetPrice,
+      // Record what the chain actually moved, not what the client claimed.
+      amount: payment.ok ? Number(payment.amountOctas) / 100_000_000 : targetPrice,
       timestamp: new Date().toISOString()
     };
 
@@ -461,15 +730,45 @@ async function startServer() {
     return res.json({ success: true, message: "On-chain payment verified successfully. Access granted.", record });
   });
 
-  // GET Download (Strict Double-Gated Access Control Layer)
-  app.post("/api/files/download", async (req, res) => {
-    const { file_id, wallet_address } = req.body;
+  // GET The caller's own verified purchases, so the client can render unlocked state after a
+  // reload instead of tracking it only in memory.
+  app.get("/api/purchases", requireAuth, async (req, res) => {
+    const buyer = req.walletAddress!;
 
-    if (!file_id || !wallet_address) {
+    if (supabase) {
+      try {
+        const { data, error } = await supabase
+          .from("purchases")
+          .select("file_id")
+          .eq("buyer", buyer);
+
+        if (error) {
+          console.error("[Supabase DB Error] Purchases lookup failed:", error);
+          return res.status(500).json({ error: "Failed to load purchase history." });
+        }
+        return res.json({ file_ids: (data || []).map((p: any) => p.file_id) });
+      } catch (err) {
+        console.error("[Supabase DB Error] Fatal purchases lookup:", err);
+        return res.status(500).json({ error: "Failed to load purchase history." });
+      }
+    }
+
+    const fileIds = db.purchases
+      .filter(p => p.buyer.toLowerCase() === buyer)
+      .map(p => p.file_id);
+
+    return res.json({ file_ids: fileIds });
+  });
+
+  // POST Download — gated on the authenticated caller being the uploader or a verified buyer
+  app.post("/api/files/download", requireAuth, async (req, res) => {
+    const { file_id } = req.body;
+
+    if (!file_id) {
       return res.status(400).json({ error: "Missing download parameters." });
     }
 
-    const cleanWallet = wallet_address.toLowerCase();
+    const cleanWallet = req.walletAddress!;
 
     if (supabase) {
       try {
@@ -504,12 +803,20 @@ async function startServer() {
           });
         }
 
-        // Access certified. Deliver AES ciphertext safely
+        // Access certified. Fetch the payload, from Shelby when that is where it lives.
+        const payload = await resolveFilePayload(targetFile);
+        if (payload.data === undefined) {
+          return res.status(502).json({
+            error: "SHELBY_READ_FAILED",
+            message: `Could not read the file back from Shelby: ${payload.reason}`
+          });
+        }
+
         return res.json({
           name: targetFile.name,
           content_type: targetFile.content_type,
           shelby_ref: targetFile.shelby_ref,
-          data: targetFile.file_data // Base64 ciphertext delivered securely
+          data: payload.data
         });
       } catch (err) {
         console.error("[Supabase DB Error] Download access resolution failed:", err);
@@ -535,11 +842,19 @@ async function startServer() {
       });
     }
 
+    const payload = await resolveFilePayload(targetFile);
+    if (payload.data === undefined) {
+      return res.status(502).json({
+        error: "SHELBY_READ_FAILED",
+        message: `Could not read the file back from Shelby: ${payload.reason}`
+      });
+    }
+
     return res.json({
       name: targetFile.name,
       content_type: targetFile.content_type,
       shelby_ref: targetFile.shelby_ref,
-      data: targetFile.file_data
+      data: payload.data
     });
   });
 

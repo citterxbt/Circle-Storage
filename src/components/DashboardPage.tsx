@@ -5,6 +5,7 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import { useAptosWallet } from "../lib/aptos-wallet";
+import { useToast } from "./Toaster";
 import { FileMetadata, DashboardStats, UserProfile } from "../types";
 import { 
   HardDrive, 
@@ -27,6 +28,7 @@ import {
 
 export default function DashboardPage() {
   const { address, connected } = useAptosWallet();
+  const toast = useToast();
   const [stats, setStats] = useState<DashboardStats>({ filesUploadedCount: 0, totalEarnings: 0 });
   const [files, setFiles] = useState<FileMetadata[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
@@ -102,7 +104,7 @@ export default function DashboardPage() {
     const file = e.target.files?.[0];
     if (file) {
       if (file.size > 1.5 * 1024 * 1024) {
-        alert("Maximum image size is 1.5MB to preserve blockchain storage limits.");
+        toast.error("Profile pictures must be 1.5 MB or smaller.");
         return;
       }
       const reader = new FileReader();
@@ -171,7 +173,6 @@ export default function DashboardPage() {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          wallet_address: address,
           username: editUsername.trim(),
           avatar_url: editAvatarUrl,
           bio: editBio,
@@ -209,8 +210,7 @@ export default function DashboardPage() {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          file_id: fileId,
-          wallet_address: address
+          file_id: fileId
         })
       });
 
@@ -247,11 +247,11 @@ export default function DashboardPage() {
         URL.revokeObjectURL(url);
       } else {
         const errDetails = await res.json();
-        alert(errDetails.message || "Failed to download file.");
+        toast.error(errDetails.message || "Could not download the file.");
       }
     } catch (err) {
       console.error("Download failure", err);
-      alert("Encountered connection error while fetching secure file.");
+      toast.error("Lost the connection to the server while fetching the file.");
     } finally {
       setDownloadingId(null);
     }
@@ -616,7 +616,7 @@ export default function DashboardPage() {
                 <h3 className="text-4xl font-mono font-bold text-white tracking-tight flex items-baseline gap-2">
                   100% <span className="text-xs text-rose-400 uppercase font-bold font-sans">Gated</span>
                 </h3>
-                <p className="text-xs text-white/50 mt-2 font-sans">Decrypting keys secured server-side. Zero leaked bytes.</p>
+                <p className="text-xs text-white/50 mt-2 font-sans">Bytes on Shelby are encrypted; their keys are held here and released only to you or a verified buyer.</p>
               </div>
             </div>
           </div>

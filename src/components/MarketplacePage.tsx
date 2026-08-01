@@ -5,11 +5,13 @@
 
 import React, { useState, useEffect } from "react";
 import { useAptosWallet } from "../lib/aptos-wallet";
+import { useToast } from "./Toaster";
 import { FileMetadata } from "../types";
 import { Coins, Download, ShieldCheck, Lock, Search, RefreshCw, Layers, Calendar, User, Eye } from "lucide-react";
 
 export default function MarketplacePage() {
   const { address, connected, balance, signAndSubmitTransaction } = useAptosWallet();
+  const toast = useToast();
   const [fileList, setFileList] = useState<FileMetadata[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [search, setSearch] = useState<string>("");
@@ -26,21 +28,19 @@ export default function MarketplacePage() {
   const fetchMarketplaceFiles = async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/files?visibility=public");
+      const res = await fetch("/api/files");
       if (res.ok) {
         const data = await res.json();
         setFileList(data);
+      }
 
-        // If a wallet is connected, check what files the user already own by verifying previous purchases
-        if (address) {
-          const ownedList: string[] = [];
-          for (const f of data) {
-            // Test if uploader is current user
-            if (f.uploader.toLowerCase() === address.toLowerCase()) {
-              ownedList.push(f.id);
-            }
-          }
-          setOwnedFileIds(ownedList);
+      // Ask the server which files this wallet has actually paid for, so unlocked state
+      // survives a reload instead of living only in this component's memory.
+      if (address) {
+        const purchasesRes = await fetch("/api/purchases");
+        if (purchasesRes.ok) {
+          const { file_ids } = await purchasesRes.json();
+          setOwnedFileIds(Array.isArray(file_ids) ? file_ids : []);
         }
       }
     } catch (err) {
@@ -52,30 +52,33 @@ export default function MarketplacePage() {
 
   const handlePurchase = async (file: FileMetadata) => {
     if (!connected || !address) {
-      alert("Please connect an Aptos wallet in the top bar before initiating purchase.");
+      toast.info("Connect an Aptos wallet in the top bar before buying.");
       return;
     }
 
     if (address.toLowerCase() === file.uploader.toLowerCase()) {
-      alert("You are the owner of this file and have default full access rights on your dashboard.");
+      toast.info("You uploaded this file — it is already available on your dashboard.");
       return;
     }
 
     if (balance < file.price) {
-      alert(`Sufficient funds required. This file requires ${file.price.toFixed(2)} APT, but your connected wallet balance is only ${balance.toFixed(2)} APT.`);
+      toast.error(`This file costs ${file.price.toFixed(2)} APT but your wallet holds ${balance.toFixed(4)} APT.`);
       return;
     }
 
     setPurchasingId(file.id);
 
     try {
-      // Step 1: Fire direct Aptos Testnet peer-to-peer APT transfer payload to uploader wallet
+      // Step 1: Pay the uploader in APT.
+      //
+      // aptos_account::transfer rather than coin::transfer: the latter aborts when the
+      // recipient has no registered CoinStore, which is now common since APT became a
+      // fungible asset. This variant handles that case.
       const txPayload = {
-        type: "entry_function_payload",
-        function: "0x1::coin::transfer",
-        type_arguments: ["0x1::aptos_coin::AptosCoin"],
-        arguments: [file.uploader, Math.floor(file.price * 100000000)], // Octas multiplication for APT precision
-        amount: file.price // Deductible pricing for Sandbox adapter
+        function: "0x1::aptos_account::transfer",
+        typeArguments: [],
+        functionArguments: [file.uploader, String(Math.floor(file.price * 100_000_000))],
+        amount: file.price // Used only for the client-side affordability check
       };
 
       const result = await signAndSubmitTransaction(txPayload);
@@ -89,15 +92,13 @@ export default function MarketplacePage() {
         },
         body: JSON.stringify({
           file_id: file.id,
-          buyer: address,
-          tx_hash: result.hash,
-          amount: file.price
+          tx_hash: result.hash
         })
       });
 
       if (verifyRes.ok) {
-        alert("Payment verified on-chain. Decrypted file content is now fully unlocked for you!");
-        setOwnedFileIds((prev) => [...prev, file.id]);
+        toast.success("Payment verified on chain. The file is unlocked.");
+        setOwnedFileIds((prev) => (prev.includes(file.id) ? prev : [...prev, file.id]));
         // Refresh listing so purchase counts are updated
         fetchMarketplaceFiles();
       } else {
@@ -107,7 +108,7 @@ export default function MarketplacePage() {
 
     } catch (err: any) {
       console.error("Purchase payment lifecycle failed", err);
-      alert(err.message || "On-chain payment process rejected or failed verification.");
+      toast.error(err.message || "The payment was rejected or could not be verified.");
     } finally {
       setPurchasingId(null);
     }
@@ -123,8 +124,7 @@ export default function MarketplacePage() {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          file_id: fileId,
-          wallet_address: address
+          file_id: fileId
         })
       });
 
@@ -161,11 +161,11 @@ export default function MarketplacePage() {
         URL.revokeObjectURL(url);
       } else {
         const errDetails = await res.json();
-        alert(errDetails.message || "Failed to download file.");
+        toast.error(errDetails.message || "Could not download the file.");
       }
     } catch (err) {
       console.error("Download fetch failed", err);
-      alert("Encountered server connection error while serving secure file.");
+      toast.error("Lost the connection to the server while fetching the file.");
     } finally {
       setDownloadingId(null);
     }

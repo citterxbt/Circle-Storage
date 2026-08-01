@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Type-check
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      # Catches the browser-side plumbing the type-checker cannot see, such as the erasure-coding
+      # WebAssembly failing to resolve into the bundle.
+      - name: Build
+        run: npm run build
+
+      - name: Confirm the erasure-coding WebAssembly is bundled
+        run: test -n "$(find dist/assets -name '*.wasm' -print -quit)"

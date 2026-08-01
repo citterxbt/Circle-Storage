@@ -11,6 +11,7 @@ import LeaderboardPage from "./components/LeaderboardPage";
 import FileUploadPage from "./components/FileUploadPage";
 import MarketplacePage from "./components/MarketplacePage";
 import PsychedelicWaterBackground from "./components/PsychedelicWaterBackground";
+import { ToastProvider } from "./components/Toaster";
 import { Coins, Menu, X, ArrowUp, Copy, Check } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -19,7 +20,7 @@ type ActiveTab = "landing" | "marketplace" | "dashboard" | "upload" | "leaderboa
 function AppContent() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("landing");
   const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
-  const { connected, address, balance, shelbyUSDBalance, connect, disconnect, availableWallets, isDetected } = useAptosWallet();
+  const { connected, address, balance, shelbyUSDBalance, connect, disconnect, availableWallets, isDetected, authenticated, signingIn, authError, signIn } = useAptosWallet();
   const [showWalletMenu, setShowWalletMenu] = useState<boolean>(false);
   const [showConnectedWalletMenu, setShowConnectedWalletMenu] = useState<boolean>(false);
   const [showGoToTop, setShowGoToTop] = useState<boolean>(false);
@@ -441,7 +442,7 @@ function AppContent() {
       {/* Main Body with Classy Page Smooth Entrance Transition */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-6 py-12" id="main-content-canvas">
         <AnimatePresence mode="wait">
-          {!connected || !address ? (
+          {!connected || !address || !authenticated ? (
             <motion.div
               key="wallet-gate-prompt"
               initial={pageTransition.initial}
@@ -462,15 +463,32 @@ function AppContent() {
                 </div>
                 <div>
                   <h3 className="text-xs font-bold uppercase tracking-widest text-white/95">
-                    Connection Required
+                    {connected && address ? "Signature Required" : "Connection Required"}
                   </h3>
                   <p className="text-[11px] text-white/50 leading-relaxed font-sans mt-1.5 px-2">
-                    Connect an authorized Aptos extension to manage decentralized storage and live agreements.
+                    {connected && address
+                      ? "Sign a one-time message so the server can verify you control this address. This costs no gas and submits no transaction."
+                      : "Connect an authorized Aptos extension to manage decentralized storage and live agreements."}
                   </p>
                 </div>
-                
+
+                {authError && (
+                  <p className="text-[11px] text-red-400 leading-relaxed font-sans px-2" id="gate-auth-error">
+                    {authError}
+                  </p>
+                )}
+
                 <div className="w-full" id="gate-actions-block">
-                  {!showGateWallets ? (
+                  {connected && address ? (
+                    <button
+                      onClick={() => signIn()}
+                      disabled={signingIn}
+                      className="w-full py-2.5 px-4 bg-gradient-to-r from-pink-500 to-amber-500 text-white font-sans font-bold text-xs uppercase tracking-wider rounded-full hover:scale-102 active:scale-98 transition-all shadow-md flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-60"
+                      id="btn-gate-sign-in"
+                    >
+                      <span>{signingIn ? "Waiting for signature..." : "Sign in with wallet"}</span>
+                    </button>
+                  ) : !showGateWallets ? (
                     <button
                       onClick={() => setShowGateWallets(true)}
                       className="w-full py-2.5 px-4 bg-gradient-to-r from-pink-500 to-amber-500 text-white font-sans font-bold text-xs uppercase tracking-wider rounded-full hover:scale-102 active:scale-98 transition-all shadow-md flex items-center justify-center gap-1.5 cursor-pointer"
@@ -598,8 +616,11 @@ function AppContent() {
 
 export default function App() {
   return (
-    <AptosWalletProvider>
-      <AppContent />
-    </AptosWalletProvider>
+    // Outside the wallet provider so wallet errors can be reported through it too.
+    <ToastProvider>
+      <AptosWalletProvider>
+        <AppContent />
+      </AptosWalletProvider>
+    </ToastProvider>
   );
 }

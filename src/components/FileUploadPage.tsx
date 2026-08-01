@@ -5,10 +5,35 @@
 
 import React, { useState, useRef } from "react";
 import { useAptosWallet } from "../lib/aptos-wallet";
+import { useToast } from "./Toaster";
+import {
+  AUTH_TAG_LENGTH_BYTES,
+  ENCRYPTION_ALGORITHM,
+  ENCRYPTION_KEY_BITS,
+  IV_LENGTH_BYTES,
+  bytesToHex
+} from "../encryption";
+import {
+  FUNGIBLE_METADATA_TYPE,
+  FUNGIBLE_TRANSFER_FUNCTION,
+  LEASE_TREASURY_ADDRESS,
+  REGISTER_BLOB_FUNCTION,
+  REGISTER_BLOB_MAX_GAS,
+  SHELBY_PAYMENT_TIER,
+  SHELBY_USD_ASSET_TYPE,
+  SHELBY_USD_SYMBOL,
+  blobCommitmentBytes,
+  buildBlobName,
+  leaseExpirationMicros,
+  leaseFee,
+  leaseFeeSmallestUnits,
+  shelbyStorageCost
+} from "../shelby";
 import { Upload, HelpCircle, Shield, FileCheck, Eye, EyeOff, Coins, Zap } from "lucide-react";
 
 export default function FileUploadPage() {
-  const { address, connected, balance, signAndSubmitTransaction } = useAptosWallet();
+  const { address, connected, shelbyUSDBalance, signAndSubmitTransaction } = useAptosWallet();
+  const toast = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // States
@@ -22,22 +47,12 @@ export default function FileUploadPage() {
   const [uploadSuccess, setUploadSuccess] = useState<boolean>(false);
   const [generatedRef, setGeneratedRef] = useState<string>("");
 
-  // Storage lease rate calculation weights (in APT per byte per month)
-  const leaseCostFactor = {
-    "7d": 0.002,
-    "30d": 0.008,
-    "90d": 0.02,
-    "365d": 0.07
-  };
-
-  const calculateLeaseFee = () => {
-    if (!file) return 0;
-    // Base cost: 0.1 APT, plus tiny fractional cost for sizing and lease length
-    const fileBytes = file.size;
-    const factor = leaseCostFactor[duration];
-    const sizeScaledFee = (fileBytes / 1024 / 1024) * factor;
-    return parseFloat((0.05 + sizeScaledFee).toFixed(4));
-  };
+  // Everything is charged on what actually gets stored, which is the ciphertext: AES-GCM adds
+  // its authentication tag and nothing else, so the billable size is known before encrypting.
+  // The fee schedule lives in src/shelby.ts because the server recomputes it from the bytes it
+  // receives, and a quote that ignored the tag would fall short at a megabyte boundary.
+  const billableSize = () => (file ? file.size + AUTH_TAG_LENGTH_BYTES : 0);
+  const calculateLeaseFee = () => (file ? leaseFee(billableSize(), duration) : 0);
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -60,38 +75,27 @@ export default function FileUploadPage() {
     fileInputRef.current?.click();
   };
 
-  const readFileAsBase64 = (targetFile: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const result = reader.result as string;
-        // Split meta data declaration to fetch raw Base64 string payload
-        const base64Content = result.split(",")[1];
-        resolve(base64Content);
-      };
-      reader.onerror = (err) => reject(err);
-      reader.readAsDataURL(targetFile);
-    });
-  };
-
   const handleUploadSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!connected || !address) {
-      alert("Please connect your wallet first.");
+      toast.info("Connect your wallet first.");
       return;
     }
     if (!file) {
-      alert("Please choose or drop a file to upload.");
+      toast.info("Choose or drop a file to upload.");
       return;
     }
     if (visibility === 'public' && (!price || parseFloat(price) < 0)) {
-      alert("Please specify a valid price >= 0 for public marketplace items.");
+      toast.info("Set a price of 0 or more for a public listing.");
       return;
     }
 
-    const leaseFee = calculateLeaseFee();
-    if (balance < leaseFee) {
-      alert(`Sufficient balance required to lock lease. Rent requires ${leaseFee} APT, but your balance is only ${balance.toFixed(2)} APT.`);
+    const fee = calculateLeaseFee();
+    if (shelbyUSDBalance < fee) {
+      toast.error(
+        `This upload needs ${fee.toFixed(8)} ${SHELBY_USD_SYMBOL} but your wallet holds ` +
+        `${shelbyUSDBalance.toFixed(8)} ${SHELBY_USD_SYMBOL}.`
+      );
       return;
     }
 
@@ -99,40 +103,115 @@ export default function FileUploadPage() {
     setUploadSuccess(false);
 
     try {
-      // Step 1: On-Chain Storage Lease lock allocation
-      setUploadStep("Submitting on-chain transaction lock to Shelby contract registry...");
-      const txPayload = {
-        type: "entry_function_payload",
-        function: "0x3::shelby::lock_storage_fee",
-        type_arguments: [],
-        arguments: [address, file.size, duration],
-        amount: leaseFee // Deducts lease fee from test account sandbox state
-      };
+      // Step 1: Encrypt the file here, before it leaves the browser.
+      //
+      // Anyone can read a Shelby blob if they know its name, and the name is public on chain, so
+      // the paywall depends on the bytes being unreadable rather than on the name being secret.
+      //
+      // This also has to come before the fee is paid. The fee is charged per megabyte of what
+      // gets stored, and the server recomputes it from the bytes it receives — so paying for the
+      // plaintext would fall short whenever the tag pushes the ciphertext into another chunk.
+      setUploadStep("Encrypting the file with AES-256...");
+      const plainBytes = new Uint8Array(await file.arrayBuffer());
+      const key = await crypto.subtle.generateKey(
+        { name: ENCRYPTION_ALGORITHM, length: ENCRYPTION_KEY_BITS },
+        true,
+        ["encrypt"]
+      );
+      const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH_BYTES));
+      const cipherBuffer = await crypto.subtle.encrypt(
+        { name: ENCRYPTION_ALGORITHM, iv },
+        key,
+        plainBytes
+      );
+      const aesKeyHex = bytesToHex(new Uint8Array(await crypto.subtle.exportKey("raw", key)));
+      const aesIvHex = bytesToHex(iv);
 
-      const result = await signAndSubmitTransaction(txPayload);
-      console.log("Aptos Testnet receipt hash:", result.hash);
+      const fileBytes = new Uint8Array(cipherBuffer);
 
-      // Step 2: Client symmetric encrypt simulation & file base64 bundling
-      setUploadStep("Preparing chunk streams and applying local AES-256 client cypher headers...");
-      const fileBase64 = await readFileAsBase64(file);
+      // Step 2: Pay this application's fee, sized from the ciphertext the server will receive.
+      //
+      // This transfers the fungible asset through the framework's primary store rather than
+      // calling shelby_usd::transfer, which is restricted to the token's admin.
+      setUploadStep("Waiting for signature: platform fee...");
+      const feeResult = await signAndSubmitTransaction({
+        function: FUNGIBLE_TRANSFER_FUNCTION,
+        typeArguments: [FUNGIBLE_METADATA_TYPE],
+        functionArguments: [
+          SHELBY_USD_ASSET_TYPE,
+          LEASE_TREASURY_ADDRESS,
+          String(leaseFeeSmallestUnits(fileBytes.length, duration))
+        ]
+      });
+      console.log("Platform fee hash:", feeResult.hash);
 
-      // Step 3: Server registration payload
-      setUploadStep("Dispatching secured bytecode chunks directly onto Shelby Node Gateway...");
+      // Step 3: Work out Shelby's commitments for the ciphertext.
+      //
+      // The SDK erasure-codes the bytes and derives the merkle root the contract records. It has
+      // to run on exactly the bytes that get uploaded, which is why encryption comes first.
+      setUploadStep("Erasure coding the file and computing Shelby commitments...");
+      const {
+        createDefaultErasureCodingProvider,
+        defaultErasureCodingConfig,
+        expectedTotalChunksets,
+        generateCommitments
+      } = await import("@shelby-protocol/sdk/browser");
+
+      const erasureConfig = defaultErasureCodingConfig();
+      const provider = await createDefaultErasureCodingProvider();
+      const commitments = await generateCommitments(provider, fileBytes);
+      const numChunksets = expectedTotalChunksets(
+        fileBytes.length,
+        erasureConfig.chunkSizeBytes * erasureConfig.erasure_k
+      );
+
+      // Step 4: Register the blob on Shelby, signed by the uploader's own wallet so the blob
+      // belongs to them. The payload is built here rather than with the SDK's helper, which
+      // targets shelbynet's wider register_blob and would not link against testnet's.
+      const blobName = buildBlobName(address, `up_${Date.now()}`, file.name);
+      setUploadStep("Waiting for signature: registering the blob on Shelby...");
+      const registerResult = await signAndSubmitTransaction({
+        function: REGISTER_BLOB_FUNCTION,
+        typeArguments: [],
+        functionArguments: [
+          blobName,
+          String(leaseExpirationMicros(duration, Date.now())),
+          blobCommitmentBytes(commitments.blob_merkle_root),
+          numChunksets,
+          String(fileBytes.length),
+          SHELBY_PAYMENT_TIER,
+          erasureConfig.enumIndex
+        ],
+        options: { maxGasAmount: REGISTER_BLOB_MAX_GAS }
+      });
+      console.log("Shelby registration hash:", registerResult.hash);
+
+      // Step 5: Hand the ciphertext to the server, which transfers them to Shelby's RPC under this
+      // project's API key and keeps no copy of its own.
+      setUploadStep("Transferring the file to Shelby storage providers...");
+      // The ciphertext is what Shelby stores, so that is what travels — never the plaintext.
+      let binary = "";
+      fileBytes.forEach((byte) => { binary += String.fromCharCode(byte); });
+      const fileBase64 = btoa(binary);
+
       const uploadRes = await fetch("/api/files/upload", {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          uploader: address,
           name: file.name,
-          size: file.size,
-          shelby_ref: `sh_testnet_${result.hash.slice(2, 24)}`,
+          shelby_ref: blobName,
           price: visibility === "private" ? 0 : parseFloat(price),
           visibility,
           duration,
           file_data: fileBase64,
-          content_type: file.type
+          content_type: file.type,
+          lease_tx: feeResult.hash,
+          blob_name: blobName,
+          register_tx: registerResult.hash,
+          aes_key: aesKeyHex,
+          aes_iv: aesIvHex
         })
       });
 
@@ -149,7 +228,7 @@ export default function FileUploadPage() {
 
     } catch (err: any) {
       console.error("Storage upload failed", err);
-      alert(err.message || "An unexpected error occurred during Shelby node dispatch.");
+      toast.error(err.message || "The upload did not complete.");
     } finally {
       setUploading(false);
       setUploadStep("");
@@ -351,10 +430,24 @@ export default function FileUploadPage() {
                   </div>
 
                   <div className="pt-3 border-t border-white/10 flex justify-between items-center">
-                    <span className="text-xs text-white/70 font-semibold direct-lease-label">On-Chain Lease cost:</span>
+                    <span className="text-xs text-white/70 font-semibold direct-lease-label">Platform fee:</span>
                     <span id="label-lease-cost" className="text-lg font-mono text-white tracking-tight flex items-center gap-1 font-bold">
                       <Coins className="w-4 h-4 text-amber-500" />
-                      {calculateLeaseFee().toFixed(4)} APT
+                      {calculateLeaseFee().toFixed(8)} {SHELBY_USD_SYMBOL}
+                    </span>
+                  </div>
+
+                  <div className="flex justify-between text-xs">
+                    <span className="text-white/60">Shelby storage, paid to the protocol:</span>
+                    <span className="text-white font-bold font-mono">
+                      {(file ? shelbyStorageCost(billableSize(), duration) : 0).toFixed(8)} {SHELBY_USD_SYMBOL}
+                    </span>
+                  </div>
+
+                  <div className="flex justify-between text-xs">
+                    <span className="text-white/60">Your {SHELBY_USD_SYMBOL} balance:</span>
+                    <span className="text-white font-bold font-mono">
+                      {shelbyUSDBalance.toFixed(8)} {SHELBY_USD_SYMBOL}
                     </span>
                   </div>
                 </div>
