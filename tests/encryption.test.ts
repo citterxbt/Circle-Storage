@@ -97,13 +97,19 @@ describe("browser to server round-trip", () => {
     ["3 KB", 3000],
     ["1 MiB exactly", 1024 * 1024],
     ["2 MiB exactly", 2 * 1024 * 1024],
-  ])("recovers %s byte for byte", async (_label, size) => {
-    const plain = crypto.randomBytes(size);
-    const { cipher, aesKey, aesIv } = await encryptAsBrowser(plain);
+  ])(
+    "recovers %s byte for byte",
+    async (_label, size) => {
+      const plain = crypto.randomBytes(size);
+      const { cipher, aesKey, aesIv } = await encryptAsBrowser(plain);
 
-    expect(cipher.length).toBe(size + AUTH_TAG_LENGTH_BYTES);
-    expect(decryptAsServer(cipher, aesKey, aesIv)).toEqual(plain);
-  });
+      expect(cipher.length).toBe(size + AUTH_TAG_LENGTH_BYTES);
+      expect(decryptAsServer(cipher, aesKey, aesIv)).toEqual(plain);
+    },
+    // The megabyte cases are kept because they sit on a pricing boundary, and encrypting that
+    // much takes longer than the default limit allows on a shared CI runner.
+    30_000
+  );
 
   it("refuses a wrong key rather than returning rubbish", async () => {
     const { cipher, aesIv } = await encryptAsBrowser(crypto.randomBytes(256));
