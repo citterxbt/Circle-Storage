@@ -92,6 +92,24 @@ break in ways the type-checker cannot see.
 | `SUPABASE_SERVICE_ROLE_KEY` | no | Supabase service-role key. Server-side only — never expose this to the client |
 | `DISABLE_HMR` | no | Set to `true` to disable Vite HMR and file watching |
 
+### Keeping a free Supabase testnet project awake
+
+Supabase's Free Plan pauses a low-activity project after a week. For this testnet repository,
+the scheduled workflow in `.github/workflows/supabase-keepalive.yml` runs one tiny read query
+each day. It is a testnet convenience, not a production availability strategy.
+
+Before enabling it, add these **Actions secrets** in GitHub under **Settings → Secrets and
+variables → Actions**:
+
+| Secret | Value |
+| --- | --- |
+| `SUPABASE_URL` | The project URL, for example `https://xyz.supabase.co` |
+| `SUPABASE_KEEPALIVE_KEY` | A server-side key authorised to read `profiles` (the current service-role key works, but a dedicated read-only key is preferable) |
+
+After pushing, open **Actions → Keep Supabase Testnet Database Awake → Run workflow** once to
+verify the secrets and table permissions. A successful run returns no database data or secrets
+to the log.
+
 ## Shelby storage
 
 Files live on Shelby, owned by the wallet that uploaded them. This has been exercised
