@@ -3,7 +3,8 @@
   "buildCommand": "npm run build",
   "functions": {
     "api/handler.ts": {
-      "maxDuration": 60
+      "maxDuration": 60,
+      "includeFiles": "dist/server.mjs"
     }
   },
   "rewrites": [
