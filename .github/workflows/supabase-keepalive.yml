@@ -1,0 +1,34 @@
+name: Keep Supabase Testnet Database Awake
+
+on:
+  # Run away from the top of the hour, when GitHub's scheduled jobs are busiest.
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+# This workflow only calls Supabase. It needs no repository permissions.
+permissions: {}
+
+jobs:
+  heartbeat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Run a minimal database query
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEEPALIVE_KEY: ${{ secrets.SUPABASE_KEEPALIVE_KEY }}
+        run: |
+          test -n "$SUPABASE_URL" || { echo "Missing SUPABASE_URL secret."; exit 1; }
+          test -n "$SUPABASE_KEEPALIVE_KEY" || { echo "Missing SUPABASE_KEEPALIVE_KEY secret."; exit 1; }
+
+          base_url="${SUPABASE_URL%/}"
+          curl --fail --silent --show-error \
+            --get "$base_url/rest/v1/profiles" \
+            --data-urlencode "select=wallet_address" \
+            --data-urlencode "limit=1" \
+            --header "apikey: $SUPABASE_KEEPALIVE_KEY" \
+            --header "Authorization: Bearer $SUPABASE_KEEPALIVE_KEY" \
+            --header "Accept: application/json" \
+            --output /dev/null
