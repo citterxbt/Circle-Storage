@@ -32,11 +32,8 @@ import {
   leaseFeeSmallestUnits,
 } from "./src/shelby";
 import { getBlobBytes, putBlobBytes, verifyBlobRegistration } from "./shelby-storage";
-import {
-  AUTH_TAG_LENGTH_BYTES,
-  isValidIvHex,
-  isValidKeyHex,
-} from "./src/encryption";
+import { isValidIvHex, isValidKeyHex } from "./src/encryption";
+import { decryptStoredFile, isEncrypted } from "./file-payload";
 
 const PORT = Number(process.env.PORT) || 3000;
 const DB_FILE = path.join(process.cwd(), "server-db.json");
@@ -152,33 +149,14 @@ async function startServer() {
     if (!read.ok) return { reason: read.reason };
 
     // Files uploaded before encryption was added have no key and are stored as they were.
-    if (!isValidKeyHex(file.aes_key) || !isValidIvHex(file.aes_iv)) {
+    if (!isEncrypted(file)) {
       return { data: read.data!.toString("base64") };
     }
 
-    // The browser encrypted with AES-GCM, which appends its authentication tag to the
-    // ciphertext; Node wants that tag separately.
-    try {
-      const cipher = read.data!;
-      // An empty file encrypts to exactly the tag, so a zero-length remainder is still valid.
-      const tagAt = cipher.length - AUTH_TAG_LENGTH_BYTES;
-      if (tagAt < 0) return { reason: "Stored file is too short to be valid ciphertext." };
+    const plain = decryptStoredFile(read.data!, file.aes_key!, file.aes_iv!);
+    if (!plain.ok) return { reason: plain.reason };
 
-      const decipher = crypto.createDecipheriv(
-        "aes-256-gcm",
-        Buffer.from(file.aes_key!.replace(/^0x/, ""), "hex"),
-        Buffer.from(file.aes_iv!.replace(/^0x/, ""), "hex")
-      );
-      decipher.setAuthTag(cipher.subarray(tagAt));
-
-      const plain = Buffer.concat([decipher.update(cipher.subarray(0, tagAt)), decipher.final()]);
-      return { data: plain.toString("base64") };
-    } catch (err) {
-      console.error(`[Circle Storage] Could not decrypt "${file.shelby_ref}":`, err);
-      // A failure here means the bytes or the key do not match, so returning the ciphertext
-      // would hand over something unusable and look like corruption further downstream.
-      return { reason: "The stored file could not be decrypted." };
-    }
+    return { data: plain.data!.toString("base64") };
   };
 
   // AUTH ROUTES

@@ -55,8 +55,26 @@ uploader, or listed publicly so that buyers pay in APT to unlock the download.
 | `npm run dev` | Dev server: Express API plus Vite middleware with HMR |
 | `npm run build` | Builds the client into `dist/` and bundles the server to `dist/server.cjs` |
 | `npm start` | Runs the production build |
+| `npm test` | Runs the test suite once |
+| `npm run test:watch` | Runs the tests in watch mode |
 | `npm run lint` | Type-checks with `tsc --noEmit` |
 | `npm run clean` | Removes build output |
+
+## Tests
+
+`tests/` covers the logic where a mistake is either exploitable or silent: payment
+verification, wallet sign-in, the encryption round-trip between browser and server, and the fee
+both sides compute independently.
+
+The cases are drawn from faults this code actually had, so they are regression guards rather
+than illustrations — a 64-character string once counted as proof of payment, a signature
+collected elsewhere once satisfied sign-in, an empty file could not be decrypted, and files at a
+megabyte boundary were rejected once encryption changed their size. Each of those has a test that
+fails if the fix is undone.
+
+CI runs the type-checker, the tests, and a build on every push and pull request. The build is
+part of it because the browser plumbing — the erasure-coding WebAssembly in particular — can
+break in ways the type-checker cannot see.
 
 ## Environment variables
 
@@ -155,7 +173,9 @@ Supabase, or another persistent store, before deploying anywhere real.
   downloading have. It needs two accounts, since a buyer cannot be the uploader.
 - Nonces are held in process memory, so sign-in breaks across more than one replica.
 - `tsc` runs with `strict` disabled; enabling it currently surfaces around 998 errors.
-- There are no automated tests and no CI.
+- Nothing covers the React components or the API routes end-to-end; the tests reach the logic
+  underneath them, not the request handlers or the UI.
+- Saving a profile, the leaderboard, and private-file visibility have not been exercised.
 - Blob names embed the owner address even though the RPC already namespaces by account, so it
   appears twice in every URL. Harmless, but untidy.
 
