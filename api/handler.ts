@@ -8,12 +8,20 @@
 // `npm run build` creates this self-contained server bundle before Vercel traces Functions.
 // Importing the source `../server` leaves it outside Vercel's Function bundle and crashes at
 // runtime with ERR_MODULE_NOT_FOUND.
-import { createApp } from "../dist/server.mjs";
+import type { createApp as createSourceApp } from "../server";
 
-let appPromise: ReturnType<typeof createApp> | undefined;
+type CreateApp = typeof createSourceApp;
 
-function getApp() {
-  if (!appPromise) appPromise = createApp({ serveFrontend: false });
+let appPromise: ReturnType<CreateApp> | undefined;
+
+async function getApp() {
+  if (!appPromise) {
+    // Keep the target in a variable so TypeScript does not require `dist/` before the build.
+    // `includeFiles` in vercel.json puts this generated file beside the Function at runtime.
+    const serverBundlePath = "../dist/server.mjs";
+    const { createApp } = (await import(serverBundlePath)) as { createApp: CreateApp };
+    appPromise = createApp({ serveFrontend: false });
+  }
   return appPromise;
 }
 
