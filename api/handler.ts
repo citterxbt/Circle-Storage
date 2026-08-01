@@ -5,7 +5,10 @@
  * plain Vite runtime treats `[...path].ts` as a literal filename, so this explicit rewrite is
  * necessary for the Express application's catch-all API surface.
  */
-import { createApp } from "../server";
+// `npm run build` creates this self-contained server bundle before Vercel traces Functions.
+// Importing the source `../server` leaves it outside Vercel's Function bundle and crashes at
+// runtime with ERR_MODULE_NOT_FOUND.
+import { createApp } from "../dist/server.mjs";
 
 let appPromise: ReturnType<typeof createApp> | undefined;
 
