@@ -29,6 +29,5 @@ jobs:
             --data-urlencode "select=wallet_address" \
             --data-urlencode "limit=1" \
             --header "apikey: $SUPABASE_KEEPALIVE_KEY" \
-            --header "Authorization: Bearer $SUPABASE_KEEPALIVE_KEY" \
             --header "Accept: application/json" \
             --output /dev/null

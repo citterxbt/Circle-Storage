@@ -104,7 +104,7 @@ variables → Actions**:
 | Secret | Value |
 | --- | --- |
 | `SUPABASE_URL` | The project URL, for example `https://xyz.supabase.co` |
-| `SUPABASE_KEEPALIVE_KEY` | A server-side key authorised to read `profiles` (the current service-role key works, but a dedicated read-only key is preferable) |
+| `SUPABASE_KEEPALIVE_KEY` | The `sb_secret_…` value under **API Keys → Secret keys**. It must stay server-side; do not use the publishable key. |
 
 After pushing, open **Actions → Keep Supabase Testnet Database Awake → Run workflow** once to
 verify the secrets and table permissions. A successful run returns no database data or secrets
