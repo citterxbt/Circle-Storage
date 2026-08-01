@@ -10,7 +10,6 @@ import path from "path";
 import fs from "fs";
 import crypto from "crypto";
 import { pathToFileURL } from "url";
-import { createServer as createViteServer } from "vite";
 import { createClient } from "@supabase/supabase-js";
 import { UserProfile, FileMetadata, PurchaseRecord, LeaderboardRow } from "./src/types";
 import {
@@ -20,6 +19,7 @@ import {
   createNonce,
   issueSessionToken,
   normalizeAddress,
+  type NonceStore,
   requireAuth,
   sessionAddress,
   verifyWalletSignature,
@@ -35,6 +35,7 @@ import {
 import { getBlobBytes, putBlobBytes, verifyBlobRegistration } from "./shelby-storage";
 import { isValidIvHex, isValidKeyHex } from "./src/encryption";
 import { decryptStoredFile, isEncrypted } from "./file-payload";
+import { MAX_SERVERLESS_CIPHERTEXT_BYTES } from "./src/file-limits";
 
 const PORT = Number(process.env.PORT) || 3000;
 const DB_FILE = path.join(process.cwd(), "server-db.json");
@@ -43,16 +44,46 @@ const DB_FILE = path.join(process.cwd(), "server-db.json");
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 
-let supabase: any = null;
+let configuredSupabase: any = null;
 if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
   try {
-    supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+    configuredSupabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     console.log("[Circle Storage] Supabase Database context initialized successfully with service role.");
   } catch (err) {
     console.error("[Circle Storage] Failed to initialize Supabase client instance:", err);
   }
 } else {
   console.log("[Circle Storage] Supabase variables not discovered in runtime. Operating local database layer.");
+}
+
+const isVercelRuntime = process.env.VERCEL === "1";
+
+/**
+ * Vercel invokes many short-lived instances, so a process-local Map would make a wallet nonce
+ * disappear between `/nonce` and `/verify`. The database function deletes only a matching,
+ * unexpired hash in one statement, which also makes a captured signature single-use.
+ */
+function createSupabaseNonceStore(client: any): NonceStore {
+  const hashNonce = (nonce: string) => crypto.createHash("sha256").update(nonce).digest("hex");
+
+  return {
+    async issue(address, nonce, expiresAt) {
+      const { error } = await client.from("auth_nonces").upsert({
+        address: address.toLowerCase(),
+        nonce_hash: hashNonce(nonce),
+        expires_at: expiresAt.toISOString(),
+      });
+      if (error) throw new Error(error.message);
+    },
+    async consume(address, nonce) {
+      const { data, error } = await client.rpc("consume_auth_nonce", {
+        p_address: address.toLowerCase(),
+        p_nonce_hash: hashNonce(nonce),
+      });
+      if (error) throw new Error(error.message);
+      return data === true;
+    },
+  };
 }
 
 // Structure of our fully integrated local Database fallback
@@ -107,15 +138,28 @@ export interface CreateAppOptions {
   persistDatabase?: (database: DatabaseSchema) => void;
   /** API tests do not need Vite or the production static-file fallback. */
   serveFrontend?: boolean;
+  /** Tests can force the local injected database even when a developer has Supabase in .env. */
+  useSupabase?: boolean;
 }
 
 export async function createApp(options: CreateAppOptions = {}) {
+  const supabase = options.useSupabase === false ? null : configuredSupabase;
+
+  if (isVercelRuntime && !supabase) {
+    throw new Error(
+      "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required on Vercel; local JSON storage is ephemeral."
+    );
+  }
+
   const app = express();
-  app.use(express.json({ limit: "50mb" }));
+  // Vercel accepts at most 4.5 MB request/response bodies. This is intentionally lower than
+  // that ceiling; the browser enforces a matching 3 MiB encrypted-file limit before payment.
+  app.use(express.json({ limit: isVercelRuntime ? "4.25mb" : "50mb" }));
   app.use(cookieParser());
 
   const db = options.database ?? loadDatabase();
   const persistDatabase = options.persistDatabase ?? saveDatabase;
+  const nonceStore = supabase ? createSupabaseNonceStore(supabase) : undefined;
 
   /** True when a lease payment has already been spent on an earlier upload. */
   const leaseTxAlreadyUsed = async (txHash: string): Promise<boolean> => {
@@ -175,27 +219,38 @@ export async function createApp(options: CreateAppOptions = {}) {
   // the caller's address from the session cookie rather than from the request body.
 
   // POST Issue a nonce for the wallet to sign
-  app.post("/api/auth/nonce", (req, res) => {
+  app.post("/api/auth/nonce", async (req, res) => {
     const address = normalizeAddress(String(req.body?.address || ""));
     if (!address) {
       return res.status(400).json({ error: "A valid Aptos address is required." });
     }
 
-    const nonce = createNonce(address);
-    return res.json({ nonce, message: buildSignInMessage(nonce) });
+    try {
+      const nonce = await createNonce(address, nonceStore);
+      return res.json({ nonce, message: buildSignInMessage(nonce) });
+    } catch (err) {
+      console.error("[Circle Storage] Could not issue wallet sign-in nonce:", err);
+      return res.status(503).json({
+        error: "AUTH_NONCE_UNAVAILABLE",
+        message: "Sign-in is temporarily unavailable. Please try again.",
+      });
+    }
   });
 
   // POST Verify the signed nonce and open a session
   app.post("/api/auth/verify", async (req, res) => {
     const { address, publicKey, signature, fullMessage, nonce } = req.body || {};
 
-    const result = await verifyWalletSignature({
-      address: String(address || ""),
-      publicKey: String(publicKey || ""),
-      signature: String(signature || ""),
-      fullMessage: String(fullMessage || ""),
-      nonce: String(nonce || ""),
-    });
+    const result = await verifyWalletSignature(
+      {
+        address: String(address || ""),
+        publicKey: String(publicKey || ""),
+        signature: String(signature || ""),
+        fullMessage: String(fullMessage || ""),
+        nonce: String(nonce || ""),
+      },
+      nonceStore
+    );
 
     if (!result.ok) {
       console.warn(`[Circle Storage] Wallet sign-in rejected: ${result.reason}`);
@@ -441,6 +496,12 @@ export async function createApp(options: CreateAppOptions = {}) {
 
     // Trust the payload we actually received rather than a client-supplied size.
     const actualSize = Buffer.byteLength(String(file_data), "base64");
+    if (isVercelRuntime && actualSize > MAX_SERVERLESS_CIPHERTEXT_BYTES) {
+      return res.status(413).json({
+        error: "FILE_TOO_LARGE",
+        message: "Vercel deployment supports files up to 3 MB. Please choose a smaller file.",
+      });
+    }
 
     const id = "file_" + crypto.randomUUID();
     const cleanUploader = req.walletAddress!;
@@ -1033,6 +1094,7 @@ export async function createApp(options: CreateAppOptions = {}) {
   if (options.serveFrontend !== false) {
     // Express production static hosting or Vite integration
     if (process.env.NODE_ENV !== "production") {
+      const { createServer: createViteServer } = await import("vite");
       const vite = await createViteServer({
         server: { middlewareMode: true },
         appType: "spa"

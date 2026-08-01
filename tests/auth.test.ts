@@ -47,7 +47,7 @@ function sign(account: Account, payload: string) {
 /** Ask for a nonce and sign it the way the browser would. */
 async function signInAs(account: Account, options: { as?: Account } = {}) {
   const address = account.accountAddress.toStringLong();
-  const nonce = createNonce(address);
+  const nonce = await createNonce(address);
   const fullMessage = fullMessageFor(address, buildSignInMessage(nonce), nonce);
   const signer = options.as ?? account;
 
@@ -109,7 +109,7 @@ describe("wallet signature verification", () => {
   it("refuses to reuse a nonce", async () => {
     const account = Account.generate();
     const address = account.accountAddress.toStringLong();
-    const nonce = createNonce(address);
+    const nonce = await createNonce(address);
     const fullMessage = fullMessageFor(address, buildSignInMessage(nonce), nonce);
     const signature = sign(account, fullMessage);
     const attempt = () =>
@@ -153,7 +153,7 @@ describe("wallet signature verification", () => {
     // A signature collected on another site that merely quotes our nonce must not pass.
     const account = Account.generate();
     const address = account.accountAddress.toStringLong();
-    const nonce = createNonce(address);
+    const nonce = await createNonce(address);
     const elsewhere = `Approve airdrop claim reference ${nonce}`;
 
     await expect(
@@ -170,7 +170,7 @@ describe("wallet signature verification", () => {
   it("rejects a genuine signature requested by another application", async () => {
     const account = Account.generate();
     const address = account.accountAddress.toStringLong();
-    const nonce = createNonce(address);
+    const nonce = await createNonce(address);
     const fullMessage = fullMessageFor(address, buildSignInMessage(nonce), nonce, {
       application: "https://evil.example",
     });
@@ -189,7 +189,7 @@ describe("wallet signature verification", () => {
   it("rejects a genuine signature from another Aptos network", async () => {
     const account = Account.generate();
     const address = account.accountAddress.toStringLong();
-    const nonce = createNonce(address);
+    const nonce = await createNonce(address);
     const fullMessage = fullMessageFor(address, buildSignInMessage(nonce), nonce, { chainId: 1 });
 
     await expect(
@@ -206,7 +206,7 @@ describe("wallet signature verification", () => {
   it("rejects a larger message that merely contains the sign-in statement", async () => {
     const account = Account.generate();
     const address = account.accountAddress.toStringLong();
-    const nonce = createNonce(address);
+    const nonce = await createNonce(address);
     const wrapped = `Approve something else — ${buildSignInMessage(nonce)}`;
     const fullMessage = fullMessageFor(address, wrapped, nonce);
 
@@ -225,7 +225,7 @@ describe("wallet signature verification", () => {
     const account = Account.generate();
     const other = Account.generate();
     const address = account.accountAddress.toStringLong();
-    const nonce = createNonce(address);
+    const nonce = await createNonce(address);
     const fullMessage = fullMessageFor(
       other.accountAddress.toStringLong(),
       buildSignInMessage(nonce),
@@ -246,7 +246,7 @@ describe("wallet signature verification", () => {
   it("rejects a payload altered after signing", async () => {
     const account = Account.generate();
     const address = account.accountAddress.toStringLong();
-    const nonce = createNonce(address);
+    const nonce = await createNonce(address);
     const fullMessage = fullMessageFor(address, buildSignInMessage(nonce), nonce);
 
     await expect(
@@ -268,7 +268,7 @@ describe("wallet signature verification", () => {
   ])("rejects a request with %s", async (_label, overrides) => {
     const account = Account.generate();
     const address = account.accountAddress.toStringLong();
-    const nonce = createNonce(address);
+    const nonce = await createNonce(address);
     const fullMessage = fullMessageFor(address, buildSignInMessage(nonce), nonce);
 
     await expect(

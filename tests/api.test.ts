@@ -31,6 +31,7 @@ describe("API authentication boundary", () => {
       database: emptyDatabase(),
       persistDatabase: () => {},
       serveFrontend: false,
+      useSupabase: false,
     });
 
     await new Promise<void>((resolve) => {

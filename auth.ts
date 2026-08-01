@@ -45,13 +45,7 @@ const SESSION_SECRET = (() => {
   return crypto.randomBytes(32).toString("hex");
 })();
 
-/**
- * Pending nonces, keyed by lowercase address.
- *
- * This is process-local, so it does not survive a restart and is not shared across
- * instances. Move it to a shared store (Supabase, Redis) before running more than one
- * replica.
- */
+/** Pending nonces used only when a shared store is not configured for local development. */
 const pendingNonces = new Map<string, { nonce: string; expiresAt: number }>();
 
 function pruneExpiredNonces() {
@@ -70,21 +64,32 @@ export function normalizeAddress(value: string): string | null {
   }
 }
 
-export function createNonce(address: string): string {
-  pruneExpiredNonces();
-  const nonce = crypto.randomBytes(16).toString("hex");
-  pendingNonces.set(address.toLowerCase(), { nonce, expiresAt: Date.now() + NONCE_TTL_MS });
-  return nonce;
+export interface NonceStore {
+  issue(address: string, nonce: string, expiresAt: Date): Promise<void>;
+  /** Atomically consume a nonce. Returns false when it is missing, expired, or already used. */
+  consume(address: string, nonce: string): Promise<boolean>;
 }
 
-/** Returns true only once per issued nonce, so a captured signature cannot be replayed. */
-function consumeNonce(address: string, nonce: string): boolean {
-  const key = address.toLowerCase();
-  const entry = pendingNonces.get(key);
-  if (!entry) return false;
-  pendingNonces.delete(key);
-  if (entry.expiresAt <= Date.now()) return false;
-  return timingSafeEqual(entry.nonce, nonce);
+const memoryNonceStore: NonceStore = {
+  async issue(address, nonce, expiresAt) {
+    pruneExpiredNonces();
+    pendingNonces.set(address.toLowerCase(), { nonce, expiresAt: expiresAt.getTime() });
+  },
+  async consume(address, nonce) {
+    const key = address.toLowerCase();
+    const entry = pendingNonces.get(key);
+    if (!entry) return false;
+    pendingNonces.delete(key);
+    if (entry.expiresAt <= Date.now()) return false;
+    return timingSafeEqual(entry.nonce, nonce);
+  },
+};
+
+/** Issue a one-time nonce. Production supplies a shared Supabase-backed store. */
+export async function createNonce(address: string, store: NonceStore = memoryNonceStore): Promise<string> {
+  const nonce = crypto.randomBytes(16).toString("hex");
+  await store.issue(address, nonce, new Date(Date.now() + NONCE_TTL_MS));
+  return nonce;
 }
 
 /** The human-readable statement the wallet is asked to sign. */
@@ -179,7 +184,10 @@ export interface VerifyResult {
   reason?: string;
 }
 
-export async function verifyWalletSignature(input: VerifyRequest): Promise<VerifyResult> {
+export async function verifyWalletSignature(
+  input: VerifyRequest,
+  nonceStore: NonceStore = memoryNonceStore
+): Promise<VerifyResult> {
   const { address, publicKey, signature, fullMessage, nonce } = input;
 
   if (!address || !publicKey || !signature || !fullMessage || !nonce) {
@@ -189,7 +197,15 @@ export async function verifyWalletSignature(input: VerifyRequest): Promise<Verif
   const normalized = normalizeAddress(address);
   if (!normalized) return { ok: false, reason: "Malformed Aptos address." };
 
-  if (!consumeNonce(normalized, nonce)) {
+  let nonceIsValid = false;
+  try {
+    nonceIsValid = await nonceStore.consume(normalized, nonce);
+  } catch (err) {
+    console.error("[Circle Storage] Could not consume wallet sign-in nonce:", err);
+    return { ok: false, reason: "Could not verify the sign-in nonce. Please try again." };
+  }
+
+  if (!nonceIsValid) {
     return { ok: false, reason: "Nonce is unknown, already used, or expired." };
   }
 

@@ -9,13 +9,13 @@ uploader, or listed publicly so that buyers pay in APT to unlock the download.
 
 > [!WARNING]
 > **Testnet beta — not production-ready.** Wallet ownership, payments, encrypted storage and
-> download access are enforced server-side, but the deployment and persistence gaps under
-> [Known gaps](#known-gaps) still need to be addressed before public use.
+> download access are enforced server-side. The Vercel deployment is intentionally limited to
+> files of at most 3 MB because the API transfers encrypted bytes as Base64 JSON.
 
 ## Stack
 
 - React 19 + Vite 6 + Tailwind CSS 4
-- Express 4 API in `server.ts`, served through Vite middleware during development
+- Express 4 API in `server.ts`, exposed on Vercel through `api/[...path].ts`
 - Persistence: Supabase when configured, otherwise a local JSON file (`server-db.json`)
 - Aptos wallet integration via injected browser extensions (AIP-62 and legacy providers)
 
@@ -52,7 +52,7 @@ uploader, or listed publicly so that buyers pay in APT to unlock the download.
 | Command | What it does |
 | --- | --- |
 | `npm run dev` | Dev server: Express API plus Vite middleware with HMR |
-| `npm run build` | Builds the client into `dist/` and bundles the server to `dist/server.cjs` |
+| `npm run build` | Builds the client into `dist/` and bundles the server to `dist/server.mjs` |
 | `npm start` | Runs the production build |
 | `npm test` | Runs the test suite once |
 | `npm run test:watch` | Runs the tests in watch mode |
@@ -88,8 +88,8 @@ break in ways the type-checker cannot see.
 | `SHELBY_API_KEY` | no | Attributes Shelby storage and egress to this project rather than an anonymous client. Works without it, but rate-limited |
 | `SHELBY_RPC_URL` | no | Shelby RPC used to transfer and read blob bytes |
 | `SHELBY_CONTRACT_ADDRESS` | no | Shelby's deployer, where blob registrations are verified |
-| `SUPABASE_URL` | no | Supabase project URL. Omit to use the local JSON store |
-| `SUPABASE_SERVICE_ROLE_KEY` | no | Supabase service-role key. Server-side only — never expose this to the client |
+| `SUPABASE_URL` | on Vercel | Supabase project URL. Omit only for local JSON-store development |
+| `SUPABASE_SERVICE_ROLE_KEY` | on Vercel | Supabase `sb_secret_…` key. Server-side only — never expose this to the client |
 | `DISABLE_HMR` | no | Set to `true` to disable Vite HMR and file watching |
 
 ### Keeping a free Supabase testnet project awake
@@ -109,6 +109,39 @@ variables → Actions**:
 After pushing, open **Actions → Keep Supabase Testnet Database Awake → Run workflow** once to
 verify the secrets and table permissions. A successful run returns no database data or secrets
 to the log.
+
+## Deploying with Vercel + Supabase
+
+This is the recommended testnet setup. Vercel serves the Vite app and runs the existing Express
+routes as one catch-all serverless API; Supabase persists profiles, listings, purchases and the
+single-use wallet sign-in nonces. No persistent Node server is needed.
+
+1. In **Supabase → SQL Editor**, run
+   [`supabase/migrations/20260801100000_circle_storage.sql`](supabase/migrations/20260801100000_circle_storage.sql).
+   It creates the application tables plus the atomic nonce-consumption function. Do this before
+   the first Vercel deploy: without `auth_nonces`, wallet sign-in deliberately fails closed.
+2. Import this GitHub repository in Vercel. `vercel.json` sets the Vite build and the `/api/*`
+   Function automatically.
+3. Add these **Vercel Environment Variables** for Production (and Preview if you use previews):
+
+   | Variable | Value |
+   | --- | --- |
+   | `SUPABASE_URL` | Your `https://…supabase.co` project URL |
+   | `SUPABASE_SERVICE_ROLE_KEY` | The Supabase **Secret key** beginning `sb_secret_` |
+   | `SESSION_SECRET` | A unique random value of 32 characters or more |
+   | `APP_ORIGIN` | Exact deployed origin, currently `https://circle-storage.vercel.app` |
+   | `SHELBY_API_KEY` | Shelby API key from Geomi |
+
+   Keep `SUPABASE_SERVICE_ROLE_KEY` and `SESSION_SECRET` server-side. They must not start with
+   `VITE_`, be put in the client, or be added to GitHub Actions logs.
+4. Redeploy, then open `https://circle-storage.vercel.app/api/auth/session`. Before a wallet
+   signs in it should return JSON `401 {"error":"UNAUTHENTICATED"}` — not Vercel's 404 page.
+   Then test the normal Petra sign-in, upload, unlock and download flow.
+
+Vercel Functions accept at most 4.5 MB request and response bodies. Since this app currently
+sends encrypted files as Base64 JSON, the UI and API cap selected plaintext files at just under
+3 MiB. For larger files, the next architecture step is a direct browser-to-Shelby upload with a
+small server-side metadata callback; do not raise the Express limit alone.
 
 ## Shelby storage
 
@@ -167,6 +200,8 @@ wallet.
 
 ```
 server.ts                  Express API, plus static hosting / Vite middleware
+api/[...path].ts           Vercel serverless wrapper for every /api route
+supabase/migrations/       Supabase schema and atomic nonce-consumption function
 src/App.tsx                App shell, tab routing, wallet header
 src/lib/aptos-wallet.tsx   Wallet detection, connection, transaction signing
 src/components/            Landing, Marketplace, Dashboard, Upload, Leaderboard
@@ -176,20 +211,18 @@ src/types.ts               Shared API and domain types
 ## Data storage
 
 File bytes live on Shelby. What this server keeps is the metadata around them — profiles,
-listings, purchases, and each file's blob name — in Supabase when configured, otherwise in
-`server-db.json` in the working directory.
+listings, purchases, each file's blob name, and hashed short-lived sign-in nonces — in Supabase
+when configured, otherwise in `server-db.json` in the working directory.
 
 That JSON file is git-ignored and is not suitable for production: it is rewritten in full on
-every request, and it is lost on restart in ephemeral environments such as Cloud Run. Configure
-Supabase, or another persistent store, before deploying anywhere real.
+every request, and it is lost on restart in ephemeral environments. Vercel refuses to start this
+API without Supabase credentials, so a deployment cannot silently fall back to ephemeral data.
 
 ## Known gaps
 
-- The Vercel deployment serves only the built client: with no `vercel.json`, the project is
-  detected as a Vite site and the Express server never runs, so `/api/*` answers 404 there and
-  nothing beyond the landing page works. Deploying this needs a host that runs
-  `dist/server.mjs`, or the API reshaped into serverless functions.
-- Nonces are held in process memory, so sign-in breaks across more than one replica.
+- Vercel's 4.5 MB Function request/response limit caps this implementation at 3 MB per selected
+  file. Large-file support requires direct browser-to-Shelby transfer rather than increasing an
+  HTTP body limit.
 - `tsc` runs with `strict` disabled; enabling it currently surfaces around 998 errors.
 - The React components are not covered by automated browser tests. Request-level tests cover
   the API authentication boundary and profile identity enforcement; upload, purchase, unlock

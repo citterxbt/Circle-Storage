@@ -13,6 +13,7 @@ import {
   IV_LENGTH_BYTES,
   bytesToHex
 } from "../encryption";
+import { MAX_UPLOAD_LABEL, MAX_UPLOAD_PLAINTEXT_BYTES } from "../file-limits";
 import {
   FUNGIBLE_METADATA_TYPE,
   FUNGIBLE_TRANSFER_FUNCTION,
@@ -58,16 +59,26 @@ export default function FileUploadPage() {
     e.preventDefault();
   };
 
+  const selectFile = (nextFile: File) => {
+    if (nextFile.size > MAX_UPLOAD_PLAINTEXT_BYTES) {
+      toast.error(
+        `Vercel deployment supports files up to ${MAX_UPLOAD_LABEL}. Choose a smaller file to upload.`
+      );
+      return;
+    }
+    setFile(nextFile);
+  };
+
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      setFile(e.dataTransfer.files[0]);
+      selectFile(e.dataTransfer.files[0]);
     }
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
-      setFile(e.target.files[0]);
+      selectFile(e.target.files[0]);
     }
   };
 
@@ -83,6 +94,10 @@ export default function FileUploadPage() {
     }
     if (!file) {
       toast.info("Choose or drop a file to upload.");
+      return;
+    }
+    if (file.size > MAX_UPLOAD_PLAINTEXT_BYTES) {
+      toast.error(`Vercel deployment supports files up to ${MAX_UPLOAD_LABEL}.`);
       return;
     }
     if (visibility === 'public' && (!price || parseFloat(price) < 0)) {
