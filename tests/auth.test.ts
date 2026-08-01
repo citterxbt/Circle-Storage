@@ -24,12 +24,17 @@ import {
 } from "../auth";
 
 /** The envelope a wallet signs, as Petra composes it. */
-function fullMessageFor(address: string, message: string, nonce: string) {
+function fullMessageFor(
+  address: string,
+  message: string,
+  nonce: string,
+  options: { application?: string; chainId?: number } = {}
+) {
   return [
     "APTOS",
     `address: ${address}`,
-    "application: http://localhost:3000",
-    "chainId: 2",
+    `application: ${options.application ?? "http://localhost:3000"}`,
+    `chainId: ${options.chainId ?? 2}`,
     `message: ${message}`,
     `nonce: ${nonce}`,
   ].join("\n");
@@ -157,6 +162,60 @@ describe("wallet signature verification", () => {
         publicKey: account.publicKey.toString(),
         signature: sign(account, elsewhere),
         fullMessage: elsewhere,
+        nonce,
+      })
+    ).resolves.toMatchObject({ ok: false });
+  });
+
+  it("rejects a genuine signature requested by another application", async () => {
+    const account = Account.generate();
+    const address = account.accountAddress.toStringLong();
+    const nonce = createNonce(address);
+    const fullMessage = fullMessageFor(address, buildSignInMessage(nonce), nonce, {
+      application: "https://evil.example",
+    });
+
+    await expect(
+      verifyWalletSignature({
+        address,
+        publicKey: account.publicKey.toString(),
+        signature: sign(account, fullMessage),
+        fullMessage,
+        nonce,
+      })
+    ).resolves.toMatchObject({ ok: false, reason: expect.stringContaining("application") });
+  });
+
+  it("rejects a genuine signature from another Aptos network", async () => {
+    const account = Account.generate();
+    const address = account.accountAddress.toStringLong();
+    const nonce = createNonce(address);
+    const fullMessage = fullMessageFor(address, buildSignInMessage(nonce), nonce, { chainId: 1 });
+
+    await expect(
+      verifyWalletSignature({
+        address,
+        publicKey: account.publicKey.toString(),
+        signature: sign(account, fullMessage),
+        fullMessage,
+        nonce,
+      })
+    ).resolves.toMatchObject({ ok: false, reason: expect.stringContaining("testnet") });
+  });
+
+  it("rejects a larger message that merely contains the sign-in statement", async () => {
+    const account = Account.generate();
+    const address = account.accountAddress.toStringLong();
+    const nonce = createNonce(address);
+    const wrapped = `Approve something else — ${buildSignInMessage(nonce)}`;
+    const fullMessage = fullMessageFor(address, wrapped, nonce);
+
+    await expect(
+      verifyWalletSignature({
+        address,
+        publicKey: account.publicKey.toString(),
+        signature: sign(account, fullMessage),
+        fullMessage,
         nonce,
       })
     ).resolves.toMatchObject({ ok: false });

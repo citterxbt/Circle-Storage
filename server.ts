@@ -9,6 +9,7 @@ import cookieParser from "cookie-parser";
 import path from "path";
 import fs from "fs";
 import crypto from "crypto";
+import { pathToFileURL } from "url";
 import { createServer as createViteServer } from "vite";
 import { createClient } from "@supabase/supabase-js";
 import { UserProfile, FileMetadata, PurchaseRecord, LeaderboardRow } from "./src/types";
@@ -55,7 +56,7 @@ if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
 }
 
 // Structure of our fully integrated local Database fallback
-interface DatabaseSchema {
+export interface DatabaseSchema {
   profiles: { [wallet: string]: UserProfile };
   files: {
     [id: string]: FileMetadata & {
@@ -100,12 +101,21 @@ function saveDatabase(db: DatabaseSchema) {
   }
 }
 
-async function startServer() {
+export interface CreateAppOptions {
+  /** Injected by request-level tests so they never read or overwrite the developer's JSON DB. */
+  database?: DatabaseSchema;
+  persistDatabase?: (database: DatabaseSchema) => void;
+  /** API tests do not need Vite or the production static-file fallback. */
+  serveFrontend?: boolean;
+}
+
+export async function createApp(options: CreateAppOptions = {}) {
   const app = express();
   app.use(express.json({ limit: "50mb" }));
   app.use(cookieParser());
 
-  const db = loadDatabase();
+  const db = options.database ?? loadDatabase();
+  const persistDatabase = options.persistDatabase ?? saveDatabase;
 
   /** True when a lease payment has already been spent on an earlier upload. */
   const leaseTxAlreadyUsed = async (txHash: string): Promise<boolean> => {
@@ -315,7 +325,7 @@ async function startServer() {
     }
 
     db.profiles[cleanWallet] = finalProfile;
-    saveDatabase(db);
+    persistDatabase(db);
     return res.json(db.profiles[cleanWallet]);
   });
 
@@ -598,7 +608,7 @@ async function startServer() {
       shelby_owner: shelbyOwner
     };
 
-    saveDatabase(db);
+    persistDatabase(db);
     return res.json({ id, status: "uploaded_success_registered", shelby_ref: shelbyRef });
   });
 
@@ -726,7 +736,7 @@ async function startServer() {
     }
 
     db.purchases.push(record);
-    saveDatabase(db);
+    persistDatabase(db);
     return res.json({ success: true, message: "On-chain payment verified successfully. Access granted.", record });
   });
 
@@ -1020,24 +1030,35 @@ async function startServer() {
     return res.json({ filesUploadedCount, totalEarnings });
   });
 
-  // Express production static hosting or Vite integration
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa"
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
-    });
+  if (options.serveFrontend !== false) {
+    // Express production static hosting or Vite integration
+    if (process.env.NODE_ENV !== "production") {
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: "spa"
+      });
+      app.use(vite.middlewares);
+    } else {
+      const distPath = path.join(process.cwd(), "dist");
+      app.use(express.static(distPath));
+      app.get("*", (req, res) => {
+        res.sendFile(path.join(distPath, "index.html"));
+      });
+    }
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  return app;
+}
+
+export async function startServer() {
+  const app = await createApp();
+  return app.listen(PORT, "0.0.0.0", () => {
     console.log(`Circle Storage application server running on http://localhost:${PORT}`);
   });
 }
 
-startServer();
+// Importing the module in tests must not bind a port or start Vite.
+const entryUrl = process.argv[1] ? pathToFileURL(path.resolve(process.argv[1])).href : "";
+if (import.meta.url === entryUrl) {
+  void startServer();
+}

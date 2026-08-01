@@ -21,6 +21,9 @@ const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 export const SESSION_COOKIE = "cs_session";
 
 const APTOS_FULLNODE = process.env.APTOS_FULLNODE_URL || "https://fullnode.testnet.aptoslabs.com/v1";
+const EXPECTED_APPLICATION =
+  process.env.APP_ORIGIN || `http://localhost:${process.env.PORT || "3000"}`;
+const EXPECTED_CHAIN_ID = process.env.APTOS_CHAIN_ID || "2";
 
 /**
  * Secret used to sign session tokens. In production this must be supplied so that sessions
@@ -87,6 +90,34 @@ function consumeNonce(address: string, nonce: string): boolean {
 /** The human-readable statement the wallet is asked to sign. */
 export function buildSignInMessage(nonce: string): string {
   return `Sign in to Circle Storage. This request will not trigger a blockchain transaction or cost any gas. Nonce: ${nonce}`;
+}
+
+/** Read one field from the AIP-62 structured message that the wallet actually signed. */
+function signedField(fullMessage: string, field: string): string | null {
+  const escaped = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = new RegExp(`^${escaped}:\\s*(.*?)\\s*$`, "im").exec(fullMessage);
+  return match?.[1] || null;
+}
+
+/**
+ * Wallets have emitted the application as either an origin or a bare host. Accept both forms,
+ * but never a different host: the application field is what prevents a signature collected by
+ * another website from becoming a Circle Storage session.
+ */
+function applicationMatches(actual: string, expected: string): boolean {
+  try {
+    const expectedUrl = new URL(expected);
+    const cleanActual = actual.trim().replace(/\/$/, "").toLowerCase();
+    return (
+      cleanActual === expectedUrl.origin.toLowerCase() ||
+      cleanActual === expectedUrl.host.toLowerCase()
+    );
+  } catch {
+    return (
+      actual.trim().replace(/\/$/, "").toLowerCase() ===
+      expected.trim().replace(/\/$/, "").toLowerCase()
+    );
+  }
 }
 
 function timingSafeEqual(a: string, b: string): boolean {
@@ -162,12 +193,24 @@ export async function verifyWalletSignature(input: VerifyRequest): Promise<Verif
     return { ok: false, reason: "Nonce is unknown, already used, or expired." };
   }
 
-  // The signature covers fullMessage, which the client supplies. Requiring our exact
-  // statement — not merely the nonce — binds the signature to this application. Otherwise an
-  // attacker could request a nonce for someone else's address, have that person sign
-  // arbitrary text containing it on another site, and replay the signature here.
-  if (!fullMessage.includes(buildSignInMessage(nonce))) {
+  // Validate every security-relevant field before checking the signature. A genuine signature
+  // is not enough when it was requested by a different dapp, on a different network, or over a
+  // larger message that merely quotes our statement.
+  if (fullMessage.split(/\r?\n/, 1)[0]?.trim() !== "APTOS") {
+    return { ok: false, reason: "Signed payload is not an Aptos structured message." };
+  }
+
+  if (signedField(fullMessage, "message") !== buildSignInMessage(nonce)) {
     return { ok: false, reason: "Signed payload is not this application's sign-in statement." };
+  }
+
+  const application = signedField(fullMessage, "application");
+  if (!application || !applicationMatches(application, EXPECTED_APPLICATION)) {
+    return { ok: false, reason: "Signed payload was requested by a different application." };
+  }
+
+  if (signedField(fullMessage, "chainId") !== EXPECTED_CHAIN_ID) {
+    return { ok: false, reason: "Wallet must be connected to Aptos testnet to sign in." };
   }
 
   // Wallets that echo the signing address must echo the one being claimed.

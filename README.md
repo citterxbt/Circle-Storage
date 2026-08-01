@@ -8,10 +8,9 @@ uploader, or listed publicly so that buyers pay in APT to unlock the download.
 ## Status
 
 > [!WARNING]
-> **Prototype — not production-ready.** This is a testnet demo. Parts of the wallet, payment
-> and access-control flow are still simulated rather than enforced, so the app must not be
-> exposed publicly or used with real assets until the items under
-> [Known gaps](#known-gaps) are addressed.
+> **Testnet beta — not production-ready.** Wallet ownership, payments, encrypted storage and
+> download access are enforced server-side, but the deployment and persistence gaps under
+> [Known gaps](#known-gaps) still need to be addressed before public use.
 
 ## Stack
 
@@ -82,7 +81,9 @@ break in ways the type-checker cannot see.
 | --- | --- | --- |
 | `PORT` | no | HTTP port to listen on (default `3000`) |
 | `SESSION_SECRET` | in production | HMAC key (32+ chars) for sign-in session cookies. In development an ephemeral key is generated, so restarts sign everyone out |
+| `APP_ORIGIN` | in production | Browser origin allowed in wallet sign-in messages. Defaults to `http://localhost:<PORT>` locally |
 | `APTOS_FULLNODE_URL` | no | Node API used to verify payments and account auth keys |
+| `APTOS_CHAIN_ID` | no | Chain ID accepted during wallet sign-in (default `2`, Aptos testnet) |
 | `ALLOW_SIMULATED_PAYMENTS` | no | `true` accepts purchases that fail on-chain verification, for local testing without a funded wallet. Ignored in production |
 | `SHELBY_API_KEY` | no | Attributes Shelby storage and egress to this project rather than an anonymous client. Works without it, but rate-limited |
 | `SHELBY_RPC_URL` | no | Shelby RPC used to transfer and read blob bytes |
@@ -166,20 +167,17 @@ Supabase, or another persistent store, before deploying anywhere real.
 
 ## Known gaps
 
-- The client-side AES-256 encryption referenced in some UI copy is not implemented. Files reach
-  Shelby as they were uploaded. Either build it or correct the copy — as it stands the interface
-  promises something it does not do.
-- Buying a file has not been exercised end-to-end with a real wallet; only uploading and
-  downloading have. It needs two accounts, since a buyer cannot be the uploader.
 - The Vercel deployment serves only the built client: with no `vercel.json`, the project is
   detected as a Vite site and the Express server never runs, so `/api/*` answers 404 there and
   nothing beyond the landing page works. Deploying this needs a host that runs
   `dist/server.mjs`, or the API reshaped into serverless functions.
 - Nonces are held in process memory, so sign-in breaks across more than one replica.
 - `tsc` runs with `strict` disabled; enabling it currently surfaces around 998 errors.
-- Nothing covers the React components or the API routes end-to-end; the tests reach the logic
-  underneath them, not the request handlers or the UI.
-- Saving a profile, the leaderboard, and private-file visibility have not been exercised.
+- The React components are not covered by automated browser tests. Request-level tests cover
+  the API authentication boundary and profile identity enforcement; upload, purchase, unlock
+  and download are covered below the HTTP layer and have also been exercised manually with real
+  Petra accounts on testnet.
+- The leaderboard and private-file visibility have not been exercised end-to-end.
 - Blob names embed the owner address even though the RPC already namespaces by account, so it
   appears twice in every URL. Harmless, but untidy.
 
