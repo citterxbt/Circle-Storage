@@ -11,6 +11,12 @@ create table if not exists public.profiles (
   telegram_social text not null default ''
 );
 
+-- Upgrade databases created by the original Circle Storage schema. `twitter_social` is left
+-- intact for historical data; the application now writes `x_social` and `github_social`.
+alter table public.profiles add column if not exists x_social text not null default '';
+alter table public.profiles add column if not exists github_social text not null default '';
+alter table public.profiles add column if not exists telegram_social text not null default '';
+
 create table if not exists public.files (
   id text primary key,
   uploader text not null references public.profiles(wallet_address),
@@ -28,6 +34,15 @@ create table if not exists public.files (
   lease_tx text not null unique,
   shelby_owner text not null default ''
 );
+
+-- These fields were added after the initial schema. Legacy files keep blank encryption/storage
+-- metadata, while all new uploads supply real values. `lease_tx` stays nullable for legacy rows
+-- but is required by the API for every newly registered upload.
+alter table public.files add column if not exists aes_iv text not null default '';
+alter table public.files add column if not exists lease_tx text;
+alter table public.files add column if not exists shelby_owner text not null default '';
+create unique index if not exists files_lease_tx_unique_idx
+  on public.files (lease_tx) where lease_tx is not null;
 
 create index if not exists files_uploader_idx on public.files (uploader);
 create index if not exists files_visibility_idx on public.files (visibility);
