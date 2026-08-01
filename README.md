@@ -171,6 +171,10 @@ Supabase, or another persistent store, before deploying anywhere real.
   promises something it does not do.
 - Buying a file has not been exercised end-to-end with a real wallet; only uploading and
   downloading have. It needs two accounts, since a buyer cannot be the uploader.
+- The Vercel deployment serves only the built client: with no `vercel.json`, the project is
+  detected as a Vite site and the Express server never runs, so `/api/*` answers 404 there and
+  nothing beyond the landing page works. Deploying this needs a host that runs
+  `dist/server.mjs`, or the API reshaped into serverless functions.
 - Nonces are held in process memory, so sign-in breaks across more than one replica.
 - `tsc` runs with `strict` disabled; enabling it currently surfaces around 998 errors.
 - Nothing covers the React components or the API routes end-to-end; the tests reach the logic
