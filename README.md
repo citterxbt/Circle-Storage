@@ -133,7 +133,7 @@ single-use wallet sign-in nonces. No persistent Node server is needed.
    | `SUPABASE_SERVICE_ROLE_KEY` | The Supabase **Secret key** beginning `sb_secret_` |
    | `SESSION_SECRET` | A unique random value of 32 characters or more |
    | `APP_ORIGIN` | Exact deployed origin, currently `https://circle-storage.vercel.app` |
-   | `SHELBY_API_KEY` | Shelby API key from Geomi |
+   | `SHELBY_API_KEY` | Geomi API key created specifically for the `shelbynet` network |
    | `SHELBY_RPC_URL` | `https://api.shelbynet.shelby.xyz/shelby` |
    | `APTOS_FULLNODE_URL` | `https://api.shelbynet.shelby.xyz/v1` |
    | `APTOS_CHAIN_ID` | `118` |

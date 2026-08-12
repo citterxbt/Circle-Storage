@@ -249,7 +249,7 @@ export default function FileUploadPage() {
         setFile(null);
       } else {
         const errDetails = await uploadRes.json();
-        throw new Error(errDetails.error || "Failed to register storage upload.");
+        throw new Error(errDetails.message || errDetails.error || "Failed to register storage upload.");
       }
 
     } catch (err: any) {
@@ -275,7 +275,7 @@ export default function FileUploadPage() {
       <div id="file-upload-header" className="animate-fadeIn">
         <h3 className="text-xl font-bold text-white font-sans flex items-center gap-2">
           <Upload className="w-5 h-5 text-pink-500" />
-          Deploy to Shelby Testnet Storage
+          Deploy to Shelbynet Storage
         </h3>
         <p className="text-xs text-white/60 font-sans mt-1">Lease globally decentralized storage on-chain and set sovereign pricing controls.</p>
       </div>

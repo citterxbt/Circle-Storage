@@ -94,6 +94,33 @@ async function withTimeout(
   }
 }
 
+/**
+ * A Geomi key is scoped to its Shelby network. During a network cutover an old Testnet key is
+ * rejected with 401/403 even though the Shelbynet RPC still permits anonymous traffic. Retry
+ * without that key so storage remains usable at the anonymous rate limit while the deployment
+ * key is being rotated.
+ */
+async function withApiKeyFallback(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+  label: string
+): Promise<Response> {
+  const response = await withTimeout(url, init, timeoutMs, label);
+  if (!SHELBY_API_KEY || (response.status !== 401 && response.status !== 403)) {
+    return response;
+  }
+
+  console.warn(
+    `[Circle Storage] Shelby rejected SHELBY_API_KEY with HTTP ${response.status}; ` +
+      "retrying anonymously. Replace it with a Geomi key created for Shelbynet."
+  );
+
+  const anonymousHeaders = new Headers(init.headers);
+  anonymousHeaders.delete("Authorization");
+  return withTimeout(url, { ...init, headers: anonymousHeaders }, timeoutMs, label);
+}
+
 async function errorBody(response: Response): Promise<string> {
   try {
     return (await response.text()).slice(0, 300);
@@ -137,7 +164,7 @@ export async function putBlobBytes(params: {
     let startError = "";
 
     for (let attempt = 0; attempt <= START_RETRY_DELAYS_MS.length; attempt += 1) {
-      startResponse = await withTimeout(
+      startResponse = await withApiKeyFallback(
         `${SHELBY_RPC_URL}/v1/multipart-uploads`,
         {
           method: "POST",
@@ -178,7 +205,7 @@ export async function putBlobBytes(params: {
     const { uploadId } = (await startResponse.json()) as { uploadId?: string };
     if (!uploadId) return { ok: false, reason: "Shelby did not return an upload id." };
 
-    const partResponse = await withTimeout(
+    const partResponse = await withApiKeyFallback(
       `${SHELBY_RPC_URL}/v1/multipart-uploads/${uploadId}/parts/0`,
       { method: "PUT", headers: rpcHeaders("application/octet-stream"), body: new Uint8Array(data) },
       PART_TIMEOUT_MS,
@@ -203,7 +230,7 @@ export async function putBlobBytes(params: {
     let completeError = "";
 
     for (let attempt = 0; attempt <= COMPLETE_RETRY_DELAYS_MS.length; attempt += 1) {
-      completeResponse = await withTimeout(
+      completeResponse = await withApiKeyFallback(
         `${SHELBY_RPC_URL}/v1/multipart-uploads/${uploadId}/complete`,
         { method: "POST", headers: rpcHeaders("application/json") },
         COMPLETE_TIMEOUT_MS,
@@ -250,7 +277,7 @@ export async function getBlobBytes(params: {
   blobName: string;
 }): Promise<ShelbyResult> {
   try {
-    const response = await withTimeout(
+    const response = await withApiKeyFallback(
       blobUrl(params.account, params.blobName),
       { method: "GET", headers: SHELBY_API_KEY ? { Authorization: `Bearer ${SHELBY_API_KEY}` } : {} },
       COMPLETE_TIMEOUT_MS,
