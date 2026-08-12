@@ -784,7 +784,13 @@ const assertExpectedNetwork = async (provider: any): Promise<void> => {
   const chainMatches =
     network.chainId === undefined ? undefined : network.chainId === EXPECTED_CHAIN_ID;
 
-  if (nameMatches === false || chainMatches === false) {
+  // Petra labels user-added networks as "custom" even when it also reports the correct
+  // Shelbynet chain ID. A verified chain ID is authoritative; only use the display name when
+  // the wallet did not expose a chain ID at all.
+  const wrongNetwork =
+    chainMatches === false || (chainMatches === undefined && nameMatches === false);
+
+  if (wrongNetwork) {
     const reported = network.name || `chain ${network.chainId}`;
     throw new Error(
       `Your wallet is connected to ${reported}, but Circle Storage runs on Shelbynet. ` +
