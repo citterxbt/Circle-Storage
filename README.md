@@ -83,7 +83,8 @@ break in ways the type-checker cannot see.
 | `SESSION_SECRET` | in production | HMAC key (32+ chars) for sign-in session cookies. In development an ephemeral key is generated, so restarts sign everyone out |
 | `APP_ORIGIN` | in production | Browser origin allowed in wallet sign-in messages. Defaults to `http://localhost:<PORT>` locally |
 | `APTOS_FULLNODE_URL` | no | Node API used to verify payments and account auth keys |
-| `APTOS_CHAIN_ID` | no | Chain ID accepted during wallet sign-in (default `2`, Aptos testnet) |
+| `APTOS_CHAIN_ID` | no | Chain ID accepted during wallet sign-in (default `118`, Shelbynet) |
+| `SHELBY_NETWORK` | no | Active file-record namespace (default `shelbynet`) |
 | `ALLOW_SIMULATED_PAYMENTS` | no | `true` accepts purchases that fail on-chain verification, for local testing without a funded wallet. Ignored in production |
 | `SHELBY_API_KEY` | no | Attributes Shelby storage and egress to this project rather than an anonymous client. Works without it, but rate-limited |
 | `SHELBY_RPC_URL` | no | Shelby RPC used to transfer and read blob bytes |
@@ -112,14 +113,16 @@ to the log.
 
 ## Deploying with Vercel + Supabase
 
-This is the recommended testnet setup. Vercel serves the Vite app and rewrites every `/api/*`
+This is the recommended Shelbynet setup. Vercel serves the Vite app and rewrites every `/api/*`
 request to one Express serverless API; Supabase persists profiles, listings, purchases and the
 single-use wallet sign-in nonces. No persistent Node server is needed.
 
 1. In **Supabase → SQL Editor**, run
-   [`supabase/migrations/20260801100000_circle_storage.sql`](supabase/migrations/20260801100000_circle_storage.sql).
-   It creates the application tables plus the atomic nonce-consumption function. Do this before
-   the first Vercel deploy: without `auth_nonces`, wallet sign-in deliberately fails closed.
+   [`supabase/migrations/20260801100000_circle_storage.sql`](supabase/migrations/20260801100000_circle_storage.sql)
+   for a new database. Then run
+   [`supabase/migrations/20260810120000_shelbynet_cutover.sql`](supabase/migrations/20260810120000_shelbynet_cutover.sql).
+   The latter is non-destructive: it marks current rows as `aptos-testnet`, while new uploads
+   are written as `shelbynet`. Do this before the first Shelbynet Vercel deploy.
 2. Import this GitHub repository in Vercel. `vercel.json` sets the Vite build and the `/api/*`
    Function automatically.
 3. Add these **Vercel Environment Variables** for Production (and Preview if you use previews):
@@ -131,6 +134,10 @@ single-use wallet sign-in nonces. No persistent Node server is needed.
    | `SESSION_SECRET` | A unique random value of 32 characters or more |
    | `APP_ORIGIN` | Exact deployed origin, currently `https://circle-storage.vercel.app` |
    | `SHELBY_API_KEY` | Shelby API key from Geomi |
+   | `SHELBY_RPC_URL` | `https://api.shelbynet.shelby.xyz/shelby` |
+   | `APTOS_FULLNODE_URL` | `https://api.shelbynet.shelby.xyz/v1` |
+   | `APTOS_CHAIN_ID` | `118` |
+   | `SHELBY_NETWORK` | `shelbynet` |
 
    Keep `SUPABASE_SERVICE_ROLE_KEY` and `SESSION_SECRET` server-side. They must not start with
    `VITE_`, be put in the client, or be added to GitHub Actions logs.
@@ -145,9 +152,8 @@ small server-side metadata callback; do not raise the Express limit alone.
 
 ## Shelby storage
 
-Files live on Shelby, owned by the wallet that uploaded them. This has been exercised
-end-to-end on Aptos testnet: a 625,466-byte upload read back at the same length, with the
-contract reporting `is_written: true` and an expiration 30 days out for a `30d` lease.
+Files live on Shelbynet, owned by the wallet that uploaded them. The network is separate from
+Aptos Testnet, so existing Testnet registrations and blob bytes are intentionally not reused.
 
 The flow, split between the browser and `shelby-storage.ts`:
 
@@ -163,16 +169,13 @@ Bytes are not kept locally once they are on Shelby; the record holds only metada
 name.
 
 > [!NOTE]
-> The `register_blob` payload is built by hand rather than with the SDK's helper, because no
-> published SDK version matches the contract deployed on Aptos testnet. That contract takes 7
-> arguments; `@shelby-protocol/sdk` 0.4.x builds the 8-to-10 argument form found on `shelbynet`,
-> passing `null` where testnet expects a `u64` and failing with `Type mismatch for argument 1`
-> before any network call. Versions 0.2.0 through 0.3.1 build 5. It is not a peer-version
-> problem — it reproduces on `@aptos-labs/ts-sdk` 5.2.1, 6.0.0 and 6.3.1 alike.
+> Shelbynet's `register_blob` uses ten arguments: object name, two optional location fields,
+> expiration, commitment, chunksets, size, payment tier, encoding, and protocol-encryption.
+> Circle Storage builds this exact payload so the app's own AES-GCM ciphertext is registered
+> correctly. The Merkle root still must be encoded as 32 bytes, not as a hex string.
 >
-> Two details the RPC enforces, both of which cost a debugging round here: the merkle root must
-> be sent as 32 bytes rather than as its hex string, and the declared part size has a floor of
-> 1 MiB however small the file is. Registration also lands on chain slightly before the RPC
+> The RPC enforces a declared part-size floor of 1 MiB even for a small file. Registration also
+> lands on chain slightly before the RPC
 > admits the blob exists, so opening an upload retries while it reports "not been registered".
 
 Two consequences of depending on this SDK, worth knowing before removing it:
@@ -227,7 +230,7 @@ API without Supabase credentials, so a deployment cannot silently fall back to e
 - The React components are not covered by automated browser tests. Request-level tests cover
   the API authentication boundary and profile identity enforcement; upload, purchase, unlock
   and download are covered below the HTTP layer and have also been exercised manually with real
-  Petra accounts on testnet.
+  Petra accounts. The migrated flow must be manually exercised again on Shelbynet.
 - The leaderboard and private-file visibility have not been exercised end-to-end.
 - Blob names embed the owner address even though the RPC already namespaces by account, so it
   appears twice in every URL. Harmless, but untidy.

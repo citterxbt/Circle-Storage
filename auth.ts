@@ -20,10 +20,10 @@ const NONCE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 export const SESSION_COOKIE = "cs_session";
 
-const APTOS_FULLNODE = process.env.APTOS_FULLNODE_URL || "https://fullnode.testnet.aptoslabs.com/v1";
+const APTOS_FULLNODE = process.env.APTOS_FULLNODE_URL || "https://api.shelbynet.shelby.xyz/v1";
 const EXPECTED_APPLICATION =
   process.env.APP_ORIGIN || `http://localhost:${process.env.PORT || "3000"}`;
-const EXPECTED_CHAIN_ID = process.env.APTOS_CHAIN_ID || "2";
+const EXPECTED_CHAIN_ID = process.env.APTOS_CHAIN_ID || "118";
 
 /**
  * Secret used to sign session tokens. In production this must be supplied so that sessions
@@ -226,7 +226,7 @@ export async function verifyWalletSignature(
   }
 
   if (signedField(fullMessage, "chainId") !== EXPECTED_CHAIN_ID) {
-    return { ok: false, reason: "Wallet must be connected to Aptos testnet to sign in." };
+    return { ok: false, reason: "Wallet must be connected to Shelbynet to sign in." };
   }
 
   // Wallets that echo the signing address must echo the one being claimed.

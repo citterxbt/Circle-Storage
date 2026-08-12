@@ -18,7 +18,7 @@ import {
   SHELBY_USD_ASSET_TYPE,
 } from "./src/shelby";
 
-const APTOS_FULLNODE = process.env.APTOS_FULLNODE_URL || "https://fullnode.testnet.aptoslabs.com/v1";
+const APTOS_FULLNODE = process.env.APTOS_FULLNODE_URL || "https://api.shelbynet.shelby.xyz/v1";
 
 const OCTAS_PER_APT = 100_000_000;
 
@@ -56,7 +56,7 @@ function sameAddress(a: string, b: string): boolean {
 }
 
 /**
- * Simulated payments let the flow be exercised without a funded testnet wallet. This is off
+ * Simulated payments let the flow be exercised without a funded Shelbynet wallet. This is off
  * unless explicitly enabled, and refuses to turn on in production.
  */
 export function simulatedPaymentsAllowed(): boolean {

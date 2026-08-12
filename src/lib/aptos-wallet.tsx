@@ -682,14 +682,14 @@ const readTransactionHash = (result: any): string | null => {
 };
 
 /** The network this app is built against. Signing anywhere else is refused. */
-const EXPECTED_CHAIN_ID = 2; // Aptos testnet
-const EXPECTED_NETWORK_NAME = "testnet";
+const EXPECTED_CHAIN_ID = 118; // Shelbynet
+const EXPECTED_NETWORK_NAME = "shelbynet";
 
 /** Node API used for read-only lookups such as balances. */
-const APTOS_FULLNODE_URL = "https://fullnode.testnet.aptoslabs.com/v1";
+const APTOS_FULLNODE_URL = "https://api.shelbynet.shelby.xyz/v1";
 
 /**
- * ShelbyUSD on Aptos testnet, as published by the fungible asset registry:
+ * ShelbyUSD on Shelbynet, as published by the fungible asset registry:
  * name "ShelbyUSD", symbol "SHELBY_USD", 8 decimals.
  */
 const SHELBY_USD_ASSET_TYPE =
@@ -787,7 +787,7 @@ const assertExpectedNetwork = async (provider: any): Promise<void> => {
   if (nameMatches === false || chainMatches === false) {
     const reported = network.name || `chain ${network.chainId}`;
     throw new Error(
-      `Your wallet is connected to ${reported}, but Circle Storage runs on Aptos testnet. ` +
+      `Your wallet is connected to ${reported}, but Circle Storage runs on Shelbynet. ` +
         `Switch the network in your wallet before signing, otherwise you could move real funds.`
     );
   }
@@ -1629,14 +1629,14 @@ export function AptosWalletProvider({ children }: { children: ReactNode }) {
     throw new Error(`${walletName} does not expose a way to submit transactions.`);
   };
 
-  // Balances come from chain, so there is nothing local to top up. Point at the real faucet
-  // and re-read the balance instead of inventing one.
+  // Balances come from chain, so there is nothing local to top up. Point at the Shelbynet
+  // faucet and re-read the balance instead of inventing one.
   const requestFaucet = () => {
     if (!address) {
       toast.info("Connect your wallet first.");
       return;
     }
-    window.open(`https://aptos.dev/network/faucet?address=${address}`, "_blank", "noopener");
+    window.open(`https://faucet.shelbynet.shelby.xyz?address=${address}`, "_blank", "noopener");
     refreshOnChainBalance(address);
   };
 

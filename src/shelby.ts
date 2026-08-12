@@ -12,7 +12,7 @@
  * and claim it settled the lease.
  */
 
-/** ShelbyUSD on Aptos testnet: name "ShelbyUSD", symbol "SHELBY_USD". */
+/** ShelbyUSD on Shelbynet: name "ShelbyUSD", symbol "SHELBY_USD". */
 export const SHELBY_USD_ASSET_TYPE =
   "0x1b18363a9f1fe5e6ebf247daba5cc1c18052bb232efdc4c50f556053922d98e1";
 
@@ -39,7 +39,7 @@ export const FUNGIBLE_TRANSFER_FUNCTION = "0x1::primary_fungible_store::transfer
 
 export const FUNGIBLE_METADATA_TYPE = "0x1::fungible_asset::Metadata";
 
-/** Shelby's deployer, the same address on Aptos testnet and shelbynet. */
+/** Shelby's deployer on Shelbynet. */
 export const SHELBY_DEPLOYER =
   "0x85fdb9a176ab8ef1d9d9c1b60d60b3924f0800ac1de1cc2085fb0b8bb4988e6a";
 
@@ -50,6 +50,9 @@ export const REGISTER_BLOB_FUNCTION = `${SHELBY_DEPLOYER}::blob_metadata::regist
  * active tier at index 0.
  */
 export const SHELBY_PAYMENT_TIER = 0;
+
+/** The protocol-level encryption enum. Circle Storage encrypts bytes itself before storage. */
+export const SHELBY_ENCRYPTION_UNENCRYPTED = 0;
 
 /**
  * Convert the SDK's merkle root into the bytes `register_blob` expects.

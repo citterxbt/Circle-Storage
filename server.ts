@@ -39,6 +39,7 @@ import { MAX_SERVERLESS_CIPHERTEXT_BYTES } from "./src/file-limits";
 
 const PORT = Number(process.env.PORT) || 3000;
 const DB_FILE = path.join(process.cwd(), "server-db.json");
+const SHELBY_NETWORK = process.env.SHELBY_NETWORK || "shelbynet";
 
 // Initialize Supabase if environment variables are provided, otherwise fallback to local JSON database gracefully
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
@@ -161,7 +162,7 @@ export async function createApp(options: CreateAppOptions = {}) {
   const persistDatabase = options.persistDatabase ?? saveDatabase;
   const nonceStore = supabase ? createSupabaseNonceStore(supabase) : undefined;
 
-  /** True when a lease payment has already been spent on an earlier upload. */
+  /** True when a lease payment has already been spent on this network. */
   const leaseTxAlreadyUsed = async (txHash: string): Promise<boolean> => {
     if (supabase) {
       try {
@@ -169,6 +170,7 @@ export async function createApp(options: CreateAppOptions = {}) {
           .from("files")
           .select("id")
           .eq("lease_tx", txHash)
+          .eq("network", SHELBY_NETWORK)
           .maybeSingle();
         if (data) return true;
       } catch (err) {
@@ -177,8 +179,13 @@ export async function createApp(options: CreateAppOptions = {}) {
       }
     }
 
-    return Object.values(db.files).some(f => f.lease_tx === txHash);
+    return Object.values(db.files).some(
+      (f) => f.lease_tx === txHash && f.network === SHELBY_NETWORK
+    );
   };
+
+  /** Legacy rows came from Aptos Testnet and must not be read through Shelbynet. */
+  const isCurrentNetworkFile = (file: { network?: string }) => file.network === SHELBY_NETWORK;
 
   /**
    * Produce the base64 payload for a download.
@@ -402,7 +409,7 @@ export async function createApp(options: CreateAppOptions = {}) {
 
     if (supabase) {
       try {
-        let query = supabase.from("files").select("*");
+        let query = supabase.from("files").select("*").eq("network", SHELBY_NETWORK);
         if (!includePrivate) {
           query = query.eq("visibility", "public");
         }
@@ -442,7 +449,7 @@ export async function createApp(options: CreateAppOptions = {}) {
       }
     }
     
-    let fileList = Object.values(db.files).map(f => {
+    let fileList = Object.values(db.files).filter(isCurrentNetworkFile).map(f => {
       // Calculate purchase count for each file
       const purchaseCount = db.purchases.filter(p => p.file_id === f.id).length;
       return {
@@ -634,7 +641,8 @@ export async function createApp(options: CreateAppOptions = {}) {
           file_data: storedPayload,
           content_type: content_type || "application/octet-stream",
           lease_tx: leaseTxHash,
-          shelby_owner: shelbyOwner
+          shelby_owner: shelbyOwner,
+          network: SHELBY_NETWORK,
         };
 
         const { error: insertError } = await supabase.from("files").insert(secureFilePayload);
@@ -666,7 +674,8 @@ export async function createApp(options: CreateAppOptions = {}) {
       file_data: storedPayload,
       content_type: content_type || "application/octet-stream",
       lease_tx: leaseTxHash,
-      shelby_owner: shelbyOwner
+      shelby_owner: shelbyOwner,
+      network: SHELBY_NETWORK,
     };
 
     persistDatabase(db);
@@ -692,6 +701,7 @@ export async function createApp(options: CreateAppOptions = {}) {
           .from("files")
           .select("*")
           .eq("id", file_id)
+          .eq("network", SHELBY_NETWORK)
           .maybeSingle();
 
         if (fileFetchError || !targetFile) {
@@ -716,7 +726,7 @@ export async function createApp(options: CreateAppOptions = {}) {
       }
     } else {
       const targetFile = db.files[file_id];
-      if (!targetFile) {
+      if (!targetFile || !isCurrentNetworkFile(targetFile)) {
         return res.status(404).json({ error: "File listing not found." });
       }
       targetPrice = Number(targetFile.price) || 0;
@@ -779,7 +789,7 @@ export async function createApp(options: CreateAppOptions = {}) {
             wallet_address: cleanBuyer,
             username: `apt_pioneer_${cleanBuyer.slice(2, 8)}`,
             avatar_url: `https://api.dicebear.com/7.x/bottts/svg?seed=${cleanBuyer}`,
-            bio: "Web3 buyer on Aptos"
+            bio: "Web3 buyer on Shelbynet"
           });
         }
 
@@ -808,6 +818,16 @@ export async function createApp(options: CreateAppOptions = {}) {
 
     if (supabase) {
       try {
+        const { data: activeFiles, error: activeFilesError } = await supabase
+          .from("files")
+          .select("id")
+          .eq("network", SHELBY_NETWORK);
+        if (activeFilesError) {
+          console.error("[Supabase DB Error] Active-network files lookup failed:", activeFilesError);
+          return res.status(500).json({ error: "Failed to load purchase history." });
+        }
+
+        const activeFileIds = new Set((activeFiles || []).map((file: any) => file.id));
         const { data, error } = await supabase
           .from("purchases")
           .select("file_id")
@@ -817,7 +837,11 @@ export async function createApp(options: CreateAppOptions = {}) {
           console.error("[Supabase DB Error] Purchases lookup failed:", error);
           return res.status(500).json({ error: "Failed to load purchase history." });
         }
-        return res.json({ file_ids: (data || []).map((p: any) => p.file_id) });
+        return res.json({
+          file_ids: (data || [])
+            .map((p: any) => p.file_id)
+            .filter((fileId: string) => activeFileIds.has(fileId)),
+        });
       } catch (err) {
         console.error("[Supabase DB Error] Fatal purchases lookup:", err);
         return res.status(500).json({ error: "Failed to load purchase history." });
@@ -825,7 +849,7 @@ export async function createApp(options: CreateAppOptions = {}) {
     }
 
     const fileIds = db.purchases
-      .filter(p => p.buyer.toLowerCase() === buyer)
+      .filter((p) => p.buyer.toLowerCase() === buyer && isCurrentNetworkFile(db.files[p.file_id]))
       .map(p => p.file_id);
 
     return res.json({ file_ids: fileIds });
@@ -848,6 +872,7 @@ export async function createApp(options: CreateAppOptions = {}) {
           .from("files")
           .select("*")
           .eq("id", file_id)
+          .eq("network", SHELBY_NETWORK)
           .maybeSingle();
 
         if (fileFetchError || !targetFile) {
@@ -897,7 +922,7 @@ export async function createApp(options: CreateAppOptions = {}) {
 
     // Legacy Local Database Fallback Logic
     const targetFile = db.files[file_id];
-    if (!targetFile) {
+    if (!targetFile || !isCurrentNetworkFile(targetFile)) {
       return res.status(404).json({ error: "Requested file not found." });
     }
 
@@ -934,7 +959,10 @@ export async function createApp(options: CreateAppOptions = {}) {
     if (supabase) {
       try {
         const { data: profiles } = await supabase.from("profiles").select("*");
-        const { data: files } = await supabase.from("files").select("*");
+        const { data: files } = await supabase
+          .from("files")
+          .select("*")
+          .eq("network", SHELBY_NETWORK);
         const { data: purchases } = await supabase.from("purchases").select("*");
 
         const leaderboard: { [wallet: string]: LeaderboardRow } = {};
@@ -1002,7 +1030,7 @@ export async function createApp(options: CreateAppOptions = {}) {
     });
 
     // Populate uploads counts
-    Object.values(db.files).forEach(f => {
+    Object.values(db.files).filter(isCurrentNetworkFile).forEach(f => {
       const uploader = f.uploader.toLowerCase();
       if (!leaderboard[uploader]) {
         leaderboard[uploader] = {
@@ -1049,13 +1077,15 @@ export async function createApp(options: CreateAppOptions = {}) {
         const { count, error } = await supabase
           .from("files")
           .select("*", { count: "exact", head: true })
-          .eq("uploader", cleanWallet);
+          .eq("uploader", cleanWallet)
+          .eq("network", SHELBY_NETWORK);
         
         // Fetch files to compute total earnings
         const { data: uploadedFiles } = await supabase
           .from("files")
           .select("id")
-          .eq("uploader", cleanWallet);
+          .eq("uploader", cleanWallet)
+          .eq("network", SHELBY_NETWORK);
         
         let totalEarnings = 0;
         if (uploadedFiles && uploadedFiles.length > 0) {
@@ -1076,14 +1106,16 @@ export async function createApp(options: CreateAppOptions = {}) {
       }
     }
 
-    const uploaderFiles = Object.values(db.files).filter(f => f.uploader.toLowerCase() === cleanWallet);
+    const uploaderFiles = Object.values(db.files).filter(
+      (f) => f.uploader.toLowerCase() === cleanWallet && isCurrentNetworkFile(f)
+    );
     const filesUploadedCount = uploaderFiles.length;
 
     // Sum price of all purchases matching this uploader's files
     let totalEarnings = 0;
     db.purchases.forEach(p => {
       const targetFile = db.files[p.file_id];
-      if (targetFile && targetFile.uploader.toLowerCase() === cleanWallet) {
+      if (targetFile && isCurrentNetworkFile(targetFile) && targetFile.uploader.toLowerCase() === cleanWallet) {
         totalEarnings += Number(p.amount) || 0;
       }
     });
