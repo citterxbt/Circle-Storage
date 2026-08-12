@@ -19,6 +19,8 @@ export interface FileMetadata {
   name: string;
   size: number;
   shelby_ref: string;
+  /** Storage/chain network. Legacy records without it are treated as Aptos Testnet. */
+  network?: string;
   price: number; // in APT
   visibility: 'private' | 'public';
   duration: '7d' | '30d' | '90d' | '365d';

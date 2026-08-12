@@ -34,7 +34,7 @@ function fullMessageFor(
     "APTOS",
     `address: ${address}`,
     `application: ${options.application ?? "http://localhost:3000"}`,
-    `chainId: ${options.chainId ?? 2}`,
+    `chainId: ${options.chainId ?? 118}`,
     `message: ${message}`,
     `nonce: ${nonce}`,
   ].join("\n");
@@ -200,7 +200,7 @@ describe("wallet signature verification", () => {
         fullMessage,
         nonce,
       })
-    ).resolves.toMatchObject({ ok: false, reason: expect.stringContaining("testnet") });
+    ).resolves.toMatchObject({ ok: false, reason: expect.stringContaining("Shelbynet") });
   });
 
   it("rejects a larger message that merely contains the sign-in statement", async () => {
@@ -254,7 +254,7 @@ describe("wallet signature verification", () => {
         address,
         publicKey: account.publicKey.toString(),
         signature: sign(account, fullMessage),
-        fullMessage: fullMessage.replace("chainId: 2", "chainId: 1"),
+        fullMessage: fullMessage.replace("chainId: 118", "chainId: 1"),
         nonce,
       })
     ).resolves.toMatchObject({ ok: false });

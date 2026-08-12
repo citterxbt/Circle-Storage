@@ -12,23 +12,22 @@
  * project's API key so storage and egress are attributed to it rather than to an anonymous
  * client.
  *
- * The SDK's `upload()` is deliberately not used: it builds the 10-argument `register_blob`
- * found on shelbynet, while Aptos testnet has a 7-argument version, so the transaction fails
- * to build. See the Shelby storage section of the README.
+ * The browser constructs the exact 10-argument `register_blob` payload required by Shelbynet.
+ * This server owns only the authenticated multipart byte transfer.
  */
 
 import { AccountAddress } from "@aptos-labs/ts-sdk";
 
 const SHELBY_RPC_URL = (
-  process.env.SHELBY_RPC_URL || "https://api.testnet.shelby.xyz/shelby"
+  process.env.SHELBY_RPC_URL || "https://api.shelbynet.shelby.xyz/shelby"
 ).replace(/\/+$/, "");
 
 const SHELBY_API_KEY = process.env.SHELBY_API_KEY || "";
 
 const APTOS_FULLNODE =
-  process.env.APTOS_FULLNODE_URL || "https://fullnode.testnet.aptoslabs.com/v1";
+  process.env.APTOS_FULLNODE_URL || "https://api.shelbynet.shelby.xyz/v1";
 
-/** Shelby's own deployer on both Aptos testnet and shelbynet. */
+/** Shelby's deployer on Shelbynet. */
 const SHELBY_DEPLOYER =
   process.env.SHELBY_CONTRACT_ADDRESS ||
   "0x85fdb9a176ab8ef1d9d9c1b60d60b3924f0800ac1de1cc2085fb0b8bb4988e6a";

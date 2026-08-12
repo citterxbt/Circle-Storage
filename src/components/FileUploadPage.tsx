@@ -18,6 +18,7 @@ import {
   FUNGIBLE_METADATA_TYPE,
   FUNGIBLE_TRANSFER_FUNCTION,
   LEASE_TREASURY_ADDRESS,
+  SHELBY_ENCRYPTION_UNENCRYPTED,
   REGISTER_BLOB_FUNCTION,
   REGISTER_BLOB_MAX_GAS,
   SHELBY_PAYMENT_TIER,
@@ -180,9 +181,9 @@ export default function FileUploadPage() {
         erasureConfig.chunkSizeBytes * erasureConfig.erasure_k
       );
 
-      // Step 4: Register the blob on Shelby, signed by the uploader's own wallet so the blob
-      // belongs to them. The payload is built here rather than with the SDK's helper, which
-      // targets shelbynet's wider register_blob and would not link against testnet's.
+      // Step 4: Register the blob on Shelbynet, signed by the uploader's own wallet so the
+      // blob belongs to them. The current Shelbynet contract takes its two location options
+      // and protocol-encryption enum in addition to the legacy Testnet arguments.
       const blobName = buildBlobName(address, `up_${Date.now()}`, file.name);
       setUploadStep("Waiting for signature: registering the blob on Shelby...");
       const registerResult = await signAndSubmitTransaction({
@@ -190,12 +191,15 @@ export default function FileUploadPage() {
         typeArguments: [],
         functionArguments: [
           blobName,
+          null,
+          null,
           String(leaseExpirationMicros(duration, Date.now())),
           blobCommitmentBytes(commitments.blob_merkle_root),
           numChunksets,
           String(fileBytes.length),
           SHELBY_PAYMENT_TIER,
-          erasureConfig.enumIndex
+          erasureConfig.enumIndex,
+          SHELBY_ENCRYPTION_UNENCRYPTED
         ],
         options: { maxGasAmount: REGISTER_BLOB_MAX_GAS }
       });

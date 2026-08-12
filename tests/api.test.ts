@@ -16,7 +16,7 @@ function walletMessage(address: string, message: string, nonce: string) {
     "APTOS",
     `address: ${address}`,
     "application: http://localhost:3000",
-    "chainId: 2",
+    "chainId: 118",
     `message: ${message}`,
     `nonce: ${nonce}`,
   ].join("\n");
