@@ -17,6 +17,7 @@ import { describe, expect, it } from "vitest";
 import { AUTH_TAG_LENGTH_BYTES } from "../src/encryption";
 import {
   LeaseDuration,
+  activeShelbyWriteLocation,
   blobCommitmentBytes,
   buildBlobName,
   isLeaseDuration,
@@ -27,6 +28,32 @@ import {
 
 const MIB = 1024 * 1024;
 const UPLOADER = "0xb79959d5aa6efcfa5dcecb8fe8a9c485c9d5a6b6c66baac8d521947862d588c0";
+
+describe("Shelbynet write location", () => {
+  it("uses the first active location returned by the on-chain registry", async () => {
+    const fetcher = async () =>
+      new Response(JSON.stringify([["shelbynet-1"]]), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+
+    await expect(activeShelbyWriteLocation(fetcher as typeof fetch)).resolves.toBe("shelbynet-1");
+  });
+
+  it("fails before payment when no storage location is active", async () => {
+    const fetcher = async () => new Response(JSON.stringify([[]]), { status: 200 });
+
+    await expect(activeShelbyWriteLocation(fetcher as typeof fetch)).rejects.toThrow(
+      /no active storage location/i
+    );
+  });
+
+  it("surfaces a node failure instead of guessing a location", async () => {
+    const fetcher = async () => new Response("unavailable", { status: 503 });
+
+    await expect(activeShelbyWriteLocation(fetcher as typeof fetch)).rejects.toThrow(/HTTP 503/);
+  });
+});
 
 describe("lease duration", () => {
   it.each(["7d", "30d", "90d", "365d"])("accepts %s", (value) => {

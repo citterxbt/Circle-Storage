@@ -172,7 +172,9 @@ name.
 > Shelbynet's `register_blob` uses ten arguments: object name, two optional location fields,
 > expiration, commitment, chunksets, size, payment tier, encoding, and protocol-encryption.
 > Circle Storage builds this exact payload so the app's own AES-GCM ciphertext is registered
-> correctly. The Merkle root still must be encoded as 32 bytes, not as a hex string.
+> correctly. Before charging the platform fee, it reads the active location registry and passes
+> that location explicitly, so a first-time account needs no preconfigured location preference.
+> The Merkle root still must be encoded as 32 bytes, not as a hex string.
 >
 > The RPC enforces a declared part-size floor of 1 MiB even for a small file. Registration also
 > lands on chain slightly before the RPC

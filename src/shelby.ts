@@ -45,6 +45,48 @@ export const SHELBY_DEPLOYER =
 
 export const REGISTER_BLOB_FUNCTION = `${SHELBY_DEPLOYER}::blob_metadata::register_blob`;
 
+/** Public Shelbynet node used to discover an active storage location before charging the user. */
+export const SHELBY_APTOS_FULLNODE_URL = "https://api.shelbynet.shelby.xyz/v1";
+
+/**
+ * Resolve a location that currently accepts Shelbynet registrations.
+ *
+ * Shelbynet is reset frequently, so the active location name is read from chain instead of
+ * hard-coded. This must happen before the platform-fee transaction: if the registry is empty or
+ * unreachable, the upload stops without charging the user for a blob that cannot be registered.
+ */
+export async function activeShelbyWriteLocation(
+  fetcher: typeof fetch = fetch
+): Promise<string> {
+  const response = await fetcher(`${SHELBY_APTOS_FULLNODE_URL}/view`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      function: `${SHELBY_DEPLOYER}::location::activated_location_names`,
+      type_arguments: [],
+      arguments: [],
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `Could not resolve a Shelbynet storage location (HTTP ${response.status}). Try again shortly.`
+    );
+  }
+
+  const result = await response.json();
+  const names = Array.isArray(result) && Array.isArray(result[0]) ? result[0] : [];
+  const active = names.find((name: unknown) => typeof name === "string" && name.trim());
+
+  if (!active) {
+    throw new Error(
+      "Shelbynet currently has no active storage location. No platform fee was charged."
+    );
+  }
+
+  return active;
+}
+
 /**
  * The payment tier to register under. Shelby's `payment` module currently exposes a single
  * active tier at index 0.

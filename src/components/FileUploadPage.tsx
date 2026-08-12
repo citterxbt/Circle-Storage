@@ -24,6 +24,7 @@ import {
   SHELBY_PAYMENT_TIER,
   SHELBY_USD_ASSET_TYPE,
   SHELBY_USD_SYMBOL,
+  activeShelbyWriteLocation,
   blobCommitmentBytes,
   buildBlobName,
   leaseExpirationMicros,
@@ -145,6 +146,12 @@ export default function FileUploadPage() {
 
       const fileBytes = new Uint8Array(cipherBuffer);
 
+      // Resolve an active location before collecting the platform fee. New Shelbynet accounts
+      // have no default location preference, and registration aborts if both location inputs are
+      // empty. Reading the registry also survives Shelbynet resets that rename the active region.
+      setUploadStep("Resolving an active Shelbynet storage location...");
+      const selectedLocation = await activeShelbyWriteLocation();
+
       // Step 2: Pay this application's fee, sized from the ciphertext the server will receive.
       //
       // This transfers the fungible asset through the framework's primary store rather than
@@ -182,8 +189,8 @@ export default function FileUploadPage() {
       );
 
       // Step 4: Register the blob on Shelbynet, signed by the uploader's own wallet so the
-      // blob belongs to them. The current Shelbynet contract takes its two location options
-      // and protocol-encryption enum in addition to the legacy Testnet arguments.
+      // blob belongs to them. Supplying the selected active location also supports first-time
+      // accounts that do not yet have an on-chain location preference.
       const blobName = buildBlobName(address, `up_${Date.now()}`, file.name);
       setUploadStep("Waiting for signature: registering the blob on Shelby...");
       const registerResult = await signAndSubmitTransaction({
@@ -191,7 +198,7 @@ export default function FileUploadPage() {
         typeArguments: [],
         functionArguments: [
           blobName,
-          null,
+          selectedLocation,
           null,
           String(leaseExpirationMicros(duration, Date.now())),
           blobCommitmentBytes(commitments.blob_merkle_root),
