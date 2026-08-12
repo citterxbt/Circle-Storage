@@ -19,6 +19,7 @@ import {
   FUNGIBLE_TRANSFER_FUNCTION,
   LEASE_TREASURY_ADDRESS,
   SHELBY_ENCRYPTION_UNENCRYPTED,
+  SHELBY_DEPLOYER,
   REGISTER_BLOB_FUNCTION,
   REGISTER_BLOB_MAX_GAS,
   SHELBY_PAYMENT_TIER,
@@ -30,6 +31,8 @@ import {
   leaseExpirationMicros,
   leaseFee,
   leaseFeeSmallestUnits,
+  registeredBlobUid,
+  waitForShelbyTransaction,
   shelbyStorageCost
 } from "../shelby";
 import { Upload, HelpCircle, Shield, FileCheck, Eye, EyeOff, Coins, Zap } from "lucide-react";
@@ -212,14 +215,54 @@ export default function FileUploadPage() {
       });
       console.log("Shelby registration hash:", registerResult.hash);
 
-      // Step 5: Hand the ciphertext to the server, which transfers them to Shelby's RPC under this
-      // project's API key and keeps no copy of its own.
+      // Step 5: The live Shelbynet write API accepts v2 chunksets. Upload directly from the
+      // browser after registration so Petra remains the owner and no wallet private key ever
+      // reaches the server. Wallet-based writes are intentionally unauthenticated at the RPC;
+      // ownership and integrity are enforced by the on-chain registration and commitments.
       setUploadStep("Transferring the file to Shelby storage providers...");
-      // The ciphertext is what Shelby stores, so that is what travels — never the plaintext.
-      let binary = "";
-      fileBytes.forEach((byte) => { binary += String.fromCharCode(byte); });
-      const fileBase64 = btoa(binary);
+      const registerTx = await waitForShelbyTransaction(registerResult.hash);
+      const uid = registeredBlobUid(registerTx, address, blobName);
+      const {
+        ShelbyBlobClient,
+        ShelbyRPCClient,
+        requiredAckCount
+      } = await import("@shelby-protocol/sdk/browser");
+      const { AccountAddress, Network } = await import("@aptos-labs/ts-sdk");
+      const rpc = new ShelbyRPCClient({ network: Network.SHELBYNET });
+      const { spAcks } = await rpc.putBlobChunksets({
+        accountAddress: address,
+        uid,
+        blobData: fileBytes,
+        commitments
+      });
 
+      const requiredAcks = requiredAckCount(erasureConfig.erasure_n);
+      if (spAcks.length < requiredAcks) {
+        throw new Error(
+          `Shelby returned ${spAcks.length} storage acknowledgements; ${requiredAcks} are required.`
+        );
+      }
+
+      // Step 6: Provider acknowledgements must be committed on chain before the blob becomes
+      // readable by name. This is the third and final wallet transaction in the upload flow.
+      setUploadStep("Waiting for signature: finalizing the Shelby blob...");
+      const commitPayload = ShelbyBlobClient.createCommitObjectPayload({
+        deployer: AccountAddress.from(SHELBY_DEPLOYER),
+        uid,
+        blobName,
+        overwrite: true,
+        storageProviderAcks: spAcks
+      });
+      const commitResult = await signAndSubmitTransaction({
+        ...commitPayload,
+        options: { maxGasAmount: REGISTER_BLOB_MAX_GAS }
+      });
+      await waitForShelbyTransaction(commitResult.hash);
+      console.log("Shelby commit hash:", commitResult.hash);
+
+      // Step 7: Store only marketplace metadata and the decryption material on the server. It
+      // independently verifies the fee, registration, and commit transactions first.
+      setUploadStep("Saving the verified file record...");
       const uploadRes = await fetch("/api/files/upload", {
         method: "POST",
         headers: {
@@ -231,11 +274,12 @@ export default function FileUploadPage() {
           price: visibility === "private" ? 0 : parseFloat(price),
           visibility,
           duration,
-          file_data: fileBase64,
+          file_size: fileBytes.length,
           content_type: file.type,
           lease_tx: feeResult.hash,
           blob_name: blobName,
           register_tx: registerResult.hash,
+          commit_tx: commitResult.hash,
           aes_key: aesKeyHex,
           aes_iv: aesIvHex
         })

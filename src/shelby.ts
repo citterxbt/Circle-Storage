@@ -49,6 +49,76 @@ export const REGISTER_BLOB_FUNCTION = `${SHELBY_DEPLOYER}::blob_metadata::regist
 export const SHELBY_APTOS_FULLNODE_URL = "https://api.shelbynet.shelby.xyz/v1";
 
 /**
+ * Wait for a wallet-submitted Shelbynet transaction to settle.
+ *
+ * The wallet returns as soon as the transaction is submitted, while the storage RPC needs the
+ * registration UID from a committed transaction before it can accept chunksets. Polling the
+ * fullnode keeps that sequencing explicit and also gives the user the real VM error if a
+ * transaction aborts.
+ */
+export async function waitForShelbyTransaction(
+  txHash: string,
+  fetcher: typeof fetch = fetch,
+  timeoutMs = 60_000
+): Promise<any> {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const response = await fetcher(`${SHELBY_APTOS_FULLNODE_URL}/transactions/by_hash/${txHash}`);
+
+    if (response.status === 404) {
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      continue;
+    }
+
+    if (!response.ok) {
+      throw new Error(`Could not confirm Shelbynet transaction (HTTP ${response.status}).`);
+    }
+
+    const transaction = await response.json();
+    if (transaction?.type === "pending_transaction") {
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      continue;
+    }
+
+    if (transaction?.type !== "user_transaction") {
+      throw new Error("Shelbynet returned an unexpected transaction type.");
+    }
+
+    if (transaction.success !== true) {
+      throw new Error(`Shelbynet transaction failed: ${transaction.vm_status || "unknown error"}.`);
+    }
+
+    return transaction;
+  }
+
+  throw new Error("Shelbynet transaction confirmation timed out. Check the transaction explorer.");
+}
+
+/** Read the blob UID emitted by `register_blob`; v2 storage writes are addressed by this UID. */
+export function registeredBlobUid(
+  transaction: any,
+  owner: string,
+  blobName: string
+): bigint {
+  const normalizedOwner = owner.toLowerCase().replace(/^0x/, "").padStart(64, "0");
+  const expectedObjectName = `@${normalizedOwner}/${blobName}`;
+  const events = Array.isArray(transaction?.events) ? transaction.events : [];
+  const event = events.find((candidate: any) => {
+    const type = String(candidate?.type || "").toLowerCase();
+    const objectName = String(candidate?.data?.object_name || "");
+    return type.endsWith("::blob_metadata::blobregisteredevent") && objectName === expectedObjectName;
+  });
+  const uid = String(event?.data?.uid || "");
+
+  if (!/^\d+$/.test(uid)) {
+    throw new Error("The registration transaction did not emit a UID for this blob.");
+  }
+
+  return BigInt(uid);
+}
+
+/**
  * Resolve a location that currently accepts Shelbynet registrations.
  *
  * Shelbynet is reset frequently, so the active location name is read from chain instead of

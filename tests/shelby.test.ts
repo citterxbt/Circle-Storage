@@ -23,6 +23,7 @@ import {
   isLeaseDuration,
   leaseExpirationMicros,
   leaseFeeSmallestUnits,
+  registeredBlobUid,
   shelbyStorageCostUnits,
 } from "../src/shelby";
 
@@ -52,6 +53,38 @@ describe("Shelbynet write location", () => {
     const fetcher = async () => new Response("unavailable", { status: 503 });
 
     await expect(activeShelbyWriteLocation(fetcher as typeof fetch)).rejects.toThrow(/HTTP 503/);
+  });
+});
+
+describe("Shelbynet v2 registration UID", () => {
+  it("finds the UID for the exact wallet-owned blob", () => {
+    const blobName = buildBlobName(UPLOADER, "up_123", "photo.png");
+    const transaction = {
+      events: [
+        {
+          type: "0x85::blob_metadata::BlobRegisteredEvent",
+          data: {
+            object_name: `@${UPLOADER.slice(2)}/${blobName}`,
+            uid: "81076022011220992",
+          },
+        },
+      ],
+    };
+
+    expect(registeredBlobUid(transaction, UPLOADER, blobName)).toBe(81076022011220992n);
+  });
+
+  it("does not accept a UID emitted for another blob", () => {
+    const transaction = {
+      events: [
+        {
+          type: "0x85::blob_metadata::BlobRegisteredEvent",
+          data: { object_name: `@${UPLOADER.slice(2)}/different.png`, uid: "123" },
+        },
+      ],
+    };
+
+    expect(() => registeredBlobUid(transaction, UPLOADER, "expected.png")).toThrow(/did not emit/i);
   });
 });
 

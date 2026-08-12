@@ -32,7 +32,7 @@ import {
   leaseExpirationMicros,
   leaseFeeSmallestUnits,
 } from "./src/shelby";
-import { getBlobBytes, putBlobBytes, verifyBlobRegistration } from "./shelby-storage";
+import { getBlobBytes, verifyBlobCommit, verifyBlobRegistration } from "./shelby-storage";
 import { isValidIvHex, isValidKeyHex } from "./src/encryption";
 import { decryptStoredFile, isEncrypted } from "./file-payload";
 import { MAX_SERVERLESS_CIPHERTEXT_BYTES } from "./src/file-limits";
@@ -480,11 +480,11 @@ export async function createApp(options: CreateAppOptions = {}) {
   // POST Upload storage file — the uploader is always the authenticated caller
   app.post("/api/files/upload", requireAuth, async (req, res) => {
     const {
-      name, shelby_ref, price, visibility, duration, file_data, content_type, lease_tx,
-      blob_name, register_tx, aes_key, aes_iv
+      name, shelby_ref, price, visibility, duration, file_data, file_size, content_type, lease_tx,
+      blob_name, register_tx, commit_tx, aes_key, aes_iv
     } = req.body;
 
-    if (!name || !shelby_ref || !duration || !file_data) {
+    if (!name || !shelby_ref || !duration) {
       return res.status(400).json({ error: "Missing required upload parameters." });
     }
 
@@ -501,8 +501,13 @@ export async function createApp(options: CreateAppOptions = {}) {
       return res.status(400).json({ error: "Price cannot be negative." });
     }
 
-    // Trust the payload we actually received rather than a client-supplied size.
-    const actualSize = Buffer.byteLength(String(file_data), "base64");
+    const requestedSize = Number(file_size);
+    let actualSize = file_data
+      ? Buffer.byteLength(String(file_data), "base64")
+      : requestedSize;
+    if (!Number.isSafeInteger(actualSize) || actualSize < 0) {
+      return res.status(400).json({ error: "Upload contains an invalid file size." });
+    }
     if (isVercelRuntime && actualSize > MAX_SERVERLESS_CIPHERTEXT_BYTES) {
       return res.status(413).json({
         error: "FILE_TOO_LARGE",
@@ -558,18 +563,17 @@ export async function createApp(options: CreateAppOptions = {}) {
       }
     }
 
-    // When the client registered a Shelby blob for this upload, transfer the bytes there and
-    // keep no local copy. `shelbyRef` becomes the real blob name and `shelbyOwner` the wallet
-    // that owns it. Uploads without a registration keep the previous behaviour of holding the
-    // bytes here, the same way the server falls back from Supabase to a local file.
+    // A Shelbynet v2 upload reaches storage providers from the browser and is then finalized by
+    // the uploader's wallet. The server records it only after independently checking both chain
+    // transactions. Legacy local uploads can still carry file_data as a fallback.
     let shelbyRef = String(shelby_ref);
     let shelbyOwner = "";
-    let storedPayload = String(file_data);
+    let storedPayload = String(file_data || "");
 
-    if (blob_name || register_tx) {
-      if (!blob_name || !register_tx) {
+    if (blob_name || register_tx || commit_tx) {
+      if (!blob_name || !register_tx || !commit_tx) {
         return res.status(400).json({
-          error: "A Shelby upload needs both blob_name and register_tx.",
+          error: "A Shelby upload needs blob_name, register_tx, and commit_tx.",
         });
       }
 
@@ -589,16 +593,24 @@ export async function createApp(options: CreateAppOptions = {}) {
         });
       }
 
-      const written = await putBlobBytes({
-        account: cleanUploader,
-        blobName: String(blob_name),
-        data: Buffer.from(storedPayload, "base64"),
+      if (registration.blobSize !== actualSize) {
+        return res.status(400).json({
+          error: "REGISTRATION_SIZE_MISMATCH",
+          message: "The registered Shelby blob size does not match this file record.",
+        });
+      }
+
+      const committed = await verifyBlobCommit({
+        txHash: String(commit_tx),
+        expectedOwner: cleanUploader,
+        expectedBlobName: String(blob_name),
+        expectedUid: registration.uid!,
       });
 
-      if (!written.ok) {
-        return res.status(502).json({
-          error: "SHELBY_WRITE_FAILED",
-          message: `Could not store the file on Shelby: ${written.reason}`,
+      if (!committed.ok) {
+        return res.status(400).json({
+          error: "COMMIT_NOT_VERIFIED",
+          message: `Could not verify the Shelby blob commit: ${committed.reason}`,
         });
       }
 

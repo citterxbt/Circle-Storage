@@ -19,7 +19,7 @@
   },
   "dependencies": {
     "@aptos-labs/ts-sdk": "^6.3.1",
-    "@shelby-protocol/sdk": "^0.4.1",
+    "@shelby-protocol/sdk": "^0.7.1",
     "@supabase/supabase-js": "^2.106.2",
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",

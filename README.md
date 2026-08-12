@@ -145,24 +145,26 @@ single-use wallet sign-in nonces. No persistent Node server is needed.
    signs in it should return JSON `401 {"error":"UNAUTHENTICATED"}` — not Vercel's 404 page.
    Then test the normal Petra sign-in, upload, unlock and download flow.
 
-Vercel Functions accept at most 4.5 MB request and response bodies. Since this app currently
-sends encrypted files as Base64 JSON, the UI and API cap selected plaintext files at just under
-3 MiB. For larger files, the next architecture step is a direct browser-to-Shelby upload with a
-small server-side metadata callback; do not raise the Express limit alone.
+Vercel Functions accept at most 4.5 MB request and response bodies. Upload bytes now travel
+directly from the browser to Shelby, but authorised downloads still pass through the API so the
+UI caps selected plaintext files at just under 3 MiB. Supporting larger files requires a
+streaming/proof-based download path; do not raise the Express limit alone.
 
 ## Shelby storage
 
 Files live on Shelbynet, owned by the wallet that uploaded them. The network is separate from
 Aptos Testnet, so existing Testnet registrations and blob bytes are intentionally not reused.
 
-The flow, split between the browser and `shelby-storage.ts`:
+The flow, split between the browser and the API:
 
 1. The browser erasure-codes the file and derives its commitments with `generateCommitments()`.
 2. The uploader's wallet signs `register_blob`, so the blob belongs to them and this server
    holds no key. The lease duration becomes the blob's on-chain expiration.
-3. The server verifies that registration on chain, then transfers the bytes:
-   `POST /v1/multipart-uploads`, `PUT …/parts/0`, `POST …/complete`.
-4. Downloads read the bytes back with a plain `GET /v1/blobs/<owner>/<blobName>`, still gated by
+3. After registration confirms, the browser sends encrypted bytes through Shelby's active v2
+   chunkset API and receives signed storage-provider acknowledgements.
+4. Petra signs `commit_object` with those acknowledgements. The API verifies the fee,
+   registration, owner, blob size, UID, and commit before storing the marketplace record.
+5. Downloads read the bytes back with a plain `GET /v1/blobs/<owner>/<blobName>`, still gated by
    this application's own authorisation.
 
 Bytes are not kept locally once they are on Shelby; the record holds only metadata and the blob
@@ -176,9 +178,8 @@ name.
 > that location explicitly, so a first-time account needs no preconfigured location preference.
 > The Merkle root still must be encoded as 32 bytes, not as a hex string.
 >
-> The RPC enforces a declared part-size floor of 1 MiB even for a small file. Registration also
-> lands on chain slightly before the RPC
-> admits the blob exists, so opening an upload retries while it reports "not been registered".
+> The current v2 RPC identifies writes by the UID emitted during registration and requires a
+> final `commit_object` transaction after the storage providers acknowledge the chunksets.
 
 Two consequences of depending on this SDK, worth knowing before removing it:
 
